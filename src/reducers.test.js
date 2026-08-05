@@ -154,6 +154,20 @@ test('an unknown pageId throws instead of silently doing nothing', () => {
 
 // --- Source Placement actions (§10.1/§10.2, Phase 5) ------------------------
 
+test('§10.1 — the SAME sourceId can be assigned to multiple Slots at once (no exclusivity constraint)', () => {
+  const left = createSlot({ id: 'l', x: 0, y: 0, w: 0.5, h: 1 });
+  const right = createSlot({ id: 'r', x: 0.5, y: 0, w: 0.5, h: 1 });
+  const page = createPage({ id: 'p1', slots: [left, right] });
+  const store = createStore(createAppState({ pages: [page] }));
+
+  store.commit(setSlotSourceAction('p1', 'l', 'src-shared'), null);
+  store.commit(setSlotSourceAction('p1', 'r', 'src-shared'), null);
+
+  const slots = store.getState().pages[0].slots;
+  assert.equal(slots[0].sourceId, 'src-shared');
+  assert.equal(slots[1].sourceId, 'src-shared');
+});
+
 test('setSlotSourceAction assigns a Source to the correct page/slot only', () => {
   const store = createStore(makeTwoPageState());
   store.commit(setSlotSourceAction('page-a', 'a1', 'src-1'), null);
