@@ -2,15 +2,16 @@
 
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
 Visual Page Imposition Designer,public repo
-https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-4 已完成**
+https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-5 已完成**
 (geometry/store/model + paper/margin/zoom/print-CSS + PDF/圖片 Source
-Engine + Layout Engine preset/自訂 Grid + Free Layout Designer 含
-Undo/Redo,156 個單元測試 + 瀏覽器實測皆通過)。下一步:Phase 5 Source
-Placement(拖曳放置、Fit/Fill/Stretch、Rotation、Scale、Offset、Flip)。
+Engine + Layout Engine preset/自訂 Grid + Free Layout Designer + Source
+Placement 含 Fit/Cover/Stretch/Rotation/Scale/Offset/Flip/Clip 與 §12.7
+中解析度 Canvas Preview,191 個單元測試 + 瀏覽器實測皆通過)。下一步:
+Phase 6 Auto Imposition(Auto Fill、Page Generation、Repeat、Odd/Even)。
 無 blocker。
 
 ## Current Version
-Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 4 完成
+Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 5 完成
 (無產品 UI,僅引擎與 dev 檢查頁)
 
 ## Project Goals
@@ -144,12 +145,56 @@ Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 4 �
     `InvalidStateError` 的問題(改成在穩定的容器元素上 capture),細節見
     change_log 2026-08-05 21:40。
 
+- Phase 5 Source Placement(2026-08-05):
+  - `src/slot-content.js` — 純 `Slot[]` 欄位編輯原語(無 DOM、不 import
+    store.js,同 Phase 4 free-layout.js 的分層方式):`setSlotSource()`/
+    `setSlotFitMode()`(驗證 contain/cover/stretch)/`setSlotScale()`
+    (正數)/`setSlotRotation()`(§10.2 MVP 僅 0/90/180/270,自動正規化
+    任意輸入角度)/`rotateSlotContent()`/`setSlotOffset()`/`setSlotFlip()`/
+    `clearSlotContent()`(重設 sourceId 與全部 transform 欄位回預設值)。
+    刻意不檢查 `locked`——§10.3 只規定鎖定擋 Move/Resize/Delete,已在檔案
+    註解記錄此範圍界定,見 decision_log D-012。
+  - `src/reducers.js` 新增對應 action creator(`setSlotSourceAction` 等
+    8 個),與 Phase 4 的 Free Layout action 共用同一個
+    `updatePageSlots()` 內部工具與 coalescing 慣例(Offset 滑桿拖曳可用
+    `coalesceKey` 收斂成一筆 undo,同 §7.2)。
+  - `src/sources.js`/`src/render-adapters.js` 補上 §12.7 中解析度 Canvas
+    Preview 分層的實際渲染:`ensurePreview(source)`/`getPreview()`/
+    `waitForPreview()`,一個 Source 被放入 Slot 時才 lazy render(§12.5
+    「只 render 目前使用中的頁面」),PDF 頁面重新 `pdfDoc.getPage()`
+    (文件在 ref-count 存活期間本來就開著)、圖片則從
+    `SourceBinaryStore` 原始 bytes 重新 decode(縮圖用的 bitmap 早已
+    `close()`)。新增 `computeImagePreviewSize()`——圖片的
+    `naturalWidth/Height` 是像素而非 pt(Phase 2 既有行為),沿用既有
+    DPI-based `computePreviewCanvasSize()` 對圖片沒有意義,故另立一個只
+    以 `maxLongEdgePx` 封頂的函式,見 decision_log D-012。
+  - `src/preview.js` 新增 `computeSlotContentTransform()`(純函式,呼叫
+    `geometry.js` 既有的 `slotContentMatrix()`,§6.3/§4.3 的唯一矩陣函式
+    ——Phase 0 已提前寫好)與 `renderSlotContent()`(DOM adapter,寫入
+    `<img>` 的 CSS `transform`);呼叫時 `slotX=slotY=0`,因為這個
+    `<img>` 是掛在 `renderSlots()` 已經定位好的 `.pl-slot` 容器內,矩陣
+    只需相對該容器自己的原點,Export(Phase 7)日後會用同一函式、換成
+    絕對 slotX/slotY 呼叫,見 decision_log D-012。`renderSlots()` 同時
+    補上 `overflow:hidden`(§6.6 裁切,Phase 3/4 只畫外框、當時還不需要
+    裁切內容)。
+  - `dev/placement.html` — Phase 5 dev harness:Source Gallery 縮圖可拖曳
+    到 Slot 上(HTML5 Drag & Drop)、Properties Panel(Fit Mode 下拉、
+    Scale 數字輸入、Rotate 90° 按鈕、Offset X/Y 滑桿、Flip X/Y 勾選、
+    清除內容按鈕)、Undo/Redo。
+  - 34 個新單元測試(共 191 個)+ 瀏覽器實測(Playwright:合成 3 頁 PDF
+    含 `/Rotate 90` + 合成雙色 PNG,驗證 contain 置中留白/cover 填滿裁切/
+    stretch 精確貼合三種 Fit 的實際 DOM bounding box、旋轉對調 fit 目標軸
+    (§6.3,視覺確認 90° 旋轉圖片仍正確 fit)、Offset 滑桿拖曳收斂為單一
+    undo 且一次 Undo 完整還原、Flip 鏡射、清除內容移除 DOM 節點並重置
+    欄位、PDF 頁面與圖片兩種 Source 皆正確產生 §12.7 中解析度 Preview 且
+    非同步就緒後自動換上)全數通過,細節見 decision_log D-012。
+
 ## Features In Development
-Phase 5(Source Placement)尚未開始:拖曳放置、Fit/Fill/Stretch、
-Rotation、Scale、Offset、Flip、Clip。
+Phase 6(Auto Imposition)尚未開始:Auto Fill、Page Generation、Repeat、
+Reverse、Odd/Even、Empty Slot、混合尺寸處理。
 
 ## Planned Features
-見 `docs/plan.md` §22 開發階段。Phase 5 → Phase 11。
+見 `docs/plan.md` §22 開發階段。Phase 6 → Phase 11。
 
 ## Known Issues
 - plan.md §9.1 的「2+2」preset 未定義其與 2×2 grid(=4up)的幾何差異,
@@ -167,6 +212,12 @@ Rotation、Scale、Offset、Flip、Clip。
   邊界、Snap 衝突時的取捨策略,plan.md 皆未明確定義,Phase 4 已依常見編輯
   器慣例自行決定並記錄假設,見 decision_log D-011。已修正 `store.js` 的
   history bug(reducer throw 時不得留下 history 記錄),見同一決議。
+- Source 的 `naturalWidth/naturalHeight` 對 `kind: 'image'` 是**像素**、對
+  `kind: 'pdf-page'` 是 **pt**(Phase 2 既有行為,見 decision_log D-012)。
+  fit 計算本身是純比例運算故不受影響,但 §12.7 中解析度 Preview 的尺寸
+  策略因此對兩種 kind 分別採 DPI 換算 vs. 純封頂兩套函式——若日後圖片
+  需要「實際列印尺寸」語意(例如使用者輸入照片實體寬高),需回頭重新設計
+  §5.2 的尺寸欄位,見 D-012 Future Review Conditions。
 
 ## Technical Architecture
 Vanilla HTML5 + ES6+,PDF.js 負責解析與預覽,pdf-lib 負責輸出,esbuild 打包成
@@ -179,19 +230,28 @@ Model 與 DOM 分離、Slot 與 Source 分離、Preview 與 Export Renderer 分�
 可在純 Node 測試。`src/free-layout.js` 同樣是純 Slot 編輯邏輯、不碰 DOM,
 `src/reducers.js` 是它與 `store.js` 之間唯一的接線層——Phase 4 是 `store.js`
 (Phase 0 完成)第一次被真正的編輯操作使用,過程中也修正了它一個既有 bug
-(reducer throw 時history 記帳未回滾,見 decision_log D-011)。開發期用
-`scripts/dev-server.mjs`(http://)跑原生 ESM,`file://` 相容性只在 Phase 11
-打包產物上驗證。
+(reducer throw 時history 記帳未回滾,見 decision_log D-011)。Phase 5 的
+`src/slot-content.js` 沿用同一種「純編輯原語 + reducers.js 接線」分層,
+`src/preview.js` 的 `computeSlotContentTransform()` 是第一個實際呼叫
+`geometry.js`(Phase 0 就寫好的)`slotContentMatrix()` 的 Preview 端
+call site,§4.3「唯一 geometry 模組」的契約從「寫好但沒人用」變成「真正
+被用上」;`src/sources.js`/`src/render-adapters.js` 補上 §12.7 中解析度
+Canvas Preview 分層的實際渲染(Phase 2 只立好 `previewCache` 架子)。
+開發期用 `scripts/dev-server.mjs`(http://)跑原生 ESM,`file://` 相容性
+只在 Phase 11 打包產物上驗證。
 
 ## Data Structure
 AppState = Project / Sources / Templates / Pages(→ Slots)/ Selection / History。
-Slot 採 normalized 座標(相對內容區 0..1),內部長度單位一律 pt。
+Slot 採 normalized 座標(相對內容區 0..1),內部長度單位一律 pt(Source 的
+`naturalWidth/Height` 例外,見上方 Known Issues 的圖片像素單位說明)。
 原始檔案 bytes 存於獨立的 `SourceBinaryStore`(`src/binary-store.js`,Phase 2
 已實作;不得被 PDF.js detach,plan §12.3),依 `docId` 保存、與 AppState 完全
 分離,不進 store.js 的 undo history。Source 的 `docId` 欄位是兩者之間的唯一
 連結(同一 PDF 檔案的所有頁 Source 共用一個 docId,見 decision_log D-009)。
 Slot 的新增/移動/縮放/分割/合併/刪除/複製透過 `src/reducers.js` 的 action
-creator 經 `store.commit()` 寫入,唯一合法的 mutation 路徑(§7.1)。
+creator 經 `store.commit()` 寫入,唯一合法的 mutation 路徑(§7.1)。Slot 的
+內容關聯與 Fit/Scale/Rotation/Offset/Flip 透過 `src/slot-content.js` 的純
+編輯原語、經同一批 `src/reducers.js` action creator 寫入(Phase 5)。
 工廠函式見 `src/model.js`,幾何運算見 `src/geometry.js`,狀態管理見
 `src/store.js`,Source Engine 見 `src/sources.js`。詳見 `docs/plan.md` §5–§7、
 §12。

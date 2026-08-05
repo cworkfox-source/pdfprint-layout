@@ -41,9 +41,9 @@ export function computeThumbnailSize(naturalWidth, naturalHeight, targetLongEdge
 }
 
 // 150 DPI target, capped so the long edge never exceeds 4096px, for the
-// mid-resolution Canvas Preview a placed Slot uses (populated starting
-// whichever later phase actually draws Sources onto the paper canvas —
-// Phase 2 only stands the cache up, see PREVIEW_CACHE_LIMIT usage below).
+// mid-resolution Canvas Preview a placed Slot uses (Phase 5 — a Source
+// becomes "目前使用中的頁面" §12.5 the moment it's assigned to a Slot, at
+// which point ensurePreview() below lazily renders into this tier).
 export function computePreviewCanvasSize(
   naturalWidthPt,
   naturalHeightPt,
@@ -62,6 +62,30 @@ export function computePreviewCanvasSize(
     height *= clamp;
   }
   return { width: Math.round(width), height: Math.round(height) };
+}
+
+// Image sources (unlike PDF pages) store PIXEL naturalWidth/naturalHeight —
+// `loadImageFile()` below assigns `createImageBitmap()`'s own width/height
+// directly, with no pt conversion, because a raster image has no inherent
+// physical size the way a PDF page's MediaBox does. A DPI target (the
+// targetDpi/72 scale computePreviewCanvasSize() above applies) is therefore
+// meaningless here — an image's Canvas Preview tier is just its native
+// resolution capped at maxLongEdgePx, never upscaled past what the file
+// actually contains. See decision_log D-012.
+export function computeImagePreviewSize(
+  naturalWidth,
+  naturalHeight,
+  { maxLongEdgePx = PREVIEW_CANVAS_MAX_LONG_EDGE_PX } = {},
+) {
+  if (!(naturalWidth > 0) || !(naturalHeight > 0)) {
+    throw new Error(`computeImagePreviewSize requires positive dimensions, got ${naturalWidth}x${naturalHeight}`);
+  }
+  const longEdge = Math.max(naturalWidth, naturalHeight);
+  if (longEdge <= maxLongEdgePx) {
+    return { width: Math.round(naturalWidth), height: Math.round(naturalHeight) };
+  }
+  const scale = maxLongEdgePx / longEdge;
+  return { width: Math.round(naturalWidth * scale), height: Math.round(naturalHeight * scale) };
 }
 
 // --- Concurrency-limited render queue (§12.5 "同時進行的 render 工作最多 3 個") --
@@ -131,6 +155,8 @@ export function createSourceEngine(deps = {}) {
     renderPdfPageThumbnail, // async ({ page, targetLongEdgePx }) => { url, width, height, release }
     decodeImage, // async (file) => { width, height, bitmap }
     renderImageThumbnail, // async ({ decoded, targetLongEdgePx }) => { url, width, height, release }
+    renderPdfPagePreview, // async ({ page, targetDpi, maxLongEdgePx }) => { url, width, height, release }
+    renderImagePreview, // async ({ bytes, naturalWidth, naturalHeight, maxLongEdgePx }) => { url, width, height, release }
     onThumbnailReady, // (sourceId, { url, width, height }) => void
     onThumbnailError, // (sourceId, error) => void
   } = deps;
@@ -141,6 +167,7 @@ export function createSourceEngine(deps = {}) {
   const openPdfDocs = new Map(); // docId -> { pdfDoc, loadingTask }
   const docRefCounts = new Map(); // docId -> number of live Sources referencing it
   const pendingThumbnailJobs = new Map(); // sourceId -> Promise
+  const pendingPreviewJobs = new Map(); // sourceId -> Promise
 
   function retainDoc(docId) {
     docRefCounts.set(docId, (docRefCounts.get(docId) ?? 0) + 1);
@@ -181,6 +208,69 @@ export function createSourceEngine(deps = {}) {
       });
     pendingThumbnailJobs.set(sourceId, job);
     return job;
+  }
+
+  function enqueuePreview(sourceId, task) {
+    const job = renderQueue
+      .run(task)
+      .then((result) => {
+        previewCache.set(sourceId, result);
+        return result;
+      })
+      .finally(() => {
+        pendingPreviewJobs.delete(sourceId);
+      });
+    pendingPreviewJobs.set(sourceId, job);
+    return job;
+  }
+
+  function getPreview(sourceId) {
+    return previewCache.get(sourceId) ?? null;
+  }
+
+  // Phase 5 — lazily renders (and LRU-caches) the §12.7 mid-resolution
+  // "Canvas Preview" tier for one Source, the first time it's actually
+  // needed (a Slot gets it assigned; §12.5's "只 render 目前使用中的頁面").
+  // Shares `renderQueue` with thumbnails, per §12.5's single concurrency cap
+  // across all render work, not one cap per tier.
+  function ensurePreview(source) {
+    const cached = previewCache.get(source.id);
+    if (cached) return Promise.resolve(cached);
+    const pending = pendingPreviewJobs.get(source.id);
+    if (pending) return pending;
+
+    if (source.kind === 'pdf-page') {
+      if (!renderPdfPagePreview) throw new Error('createSourceEngine requires deps.renderPdfPagePreview for pdf-page sources');
+      const open = openPdfDocs.get(source.docId);
+      if (!open) throw new Error(`ensurePreview: no open PDF document for docId ${source.docId}`);
+      return enqueuePreview(source.id, async () => {
+        const page = await open.pdfDoc.getPage(source.pageIndex + 1);
+        return renderPdfPagePreview({
+          page,
+          targetDpi: PREVIEW_CANVAS_TARGET_DPI,
+          maxLongEdgePx: PREVIEW_CANVAS_MAX_LONG_EDGE_PX,
+        });
+      });
+    }
+
+    if (source.kind === 'image') {
+      if (!renderImagePreview) throw new Error('createSourceEngine requires deps.renderImagePreview for image sources');
+      const bytes = binaryStore.get(source.docId);
+      if (!bytes) throw new Error(`ensurePreview: no original bytes for docId ${source.docId}`);
+      return enqueuePreview(source.id, () => renderImagePreview({
+        bytes,
+        naturalWidth: source.naturalWidth,
+        naturalHeight: source.naturalHeight,
+        maxLongEdgePx: PREVIEW_CANVAS_MAX_LONG_EDGE_PX,
+      }));
+    }
+
+    // blank/color/text (§5.2): no rendered content to preview (yet).
+    return Promise.resolve(null);
+  }
+
+  function waitForPreview(sourceId) {
+    return pendingPreviewJobs.get(sourceId) ?? Promise.resolve(getPreview(sourceId));
   }
 
   // §12.1/§12.2 — loads a PDF file, creates one Source per selected page
@@ -313,6 +403,9 @@ export function createSourceEngine(deps = {}) {
     getThumbnail,
     waitForThumbnail,
     waitForAllThumbnails,
+    getPreview,
+    ensurePreview,
+    waitForPreview,
     releaseSource,
     releaseAllSources,
     // exposed for tests/dev-harness introspection, not part of the "public API" surface

@@ -7,7 +7,7 @@
 // lossless).
 
 import { resolvePaperSizePt } from './model.js';
-import { sortByZOrder } from './geometry.js';
+import { sortByZOrder, slotContentMatrix } from './geometry.js';
 
 // Preview-only convention: at zoom 1.0, 1pt = 1 CSS px. This is purely a
 // Preview Renderer choice — Export (pdf-lib) never sees pixels, only pt
@@ -154,8 +154,82 @@ export function renderSlots(contentEl, slots, contentAreaWidthPx, contentAreaHei
     el.style.height = `${height}px`;
     el.style.outline = '1px solid rgba(200,0,0,0.85)';
     el.style.background = 'rgba(200,0,0,0.05)';
+    // §6.6 — Cover / any scale > fitScale overflows the Slot rect and MUST
+    // be clipped to it; this is the one place that clip boundary is set, so
+    // renderSlotContent() below never has to worry about it.
+    el.style.overflow = 'hidden';
     contentEl.appendChild(el);
   }
+  return contentEl;
+}
+
+// --- Source Placement (§10.1/§10.2/§6.6, Phase 5) -------------------------
+
+// Pure half of drawing a Slot's placed content: the CSS transform matrix for
+// an element sized exactly `contentWidthPx x contentHeightPx` (the content's
+// OWN preview-resolution pixel size — e.g. a cached thumbnail/preview
+// entry's width/height, not the Source's pt-based naturalWidth/Height) to
+// sit correctly inside a Slot box of `slotWidthPx x slotHeightPx`.
+//
+// Calls geometry.js's slotContentMatrix() — the SAME function Export will
+// use (§4.3) — with slotX/slotY pinned to 0 rather than the Slot's real
+// content-area-relative position: this element is placed as a DOM CHILD of
+// the already-positioned-and-clipped `.pl-slot` box renderSlots() creates,
+// so its transform only needs to be relative to that box's own (0,0), not
+// the outer content area's. Export (Phase 7) will call slotContentMatrix()
+// again with the real absolute slotX/slotY, since pdf-lib draws onto one
+// flat page with no nested "already positioned" container to lean on — same
+// shared function, different origin parameter for each renderer's own
+// coordinate frame, not a second implementation of the matrix itself.
+export function computeSlotContentTransform(slot, contentWidthPx, contentHeightPx, slotWidthPx, slotHeightPx) {
+  const matrix = slotContentMatrix({
+    slotX: 0,
+    slotY: 0,
+    slotW: slotWidthPx,
+    slotH: slotHeightPx,
+    contentW: contentWidthPx,
+    contentH: contentHeightPx,
+    fitMode: slot.fitMode,
+    scale: slot.scale,
+    rotation: slot.rotation,
+    offsetX: slot.offsetX,
+    offsetY: slot.offsetY,
+    flipX: slot.flipX,
+    flipY: slot.flipY,
+  });
+  return { matrix, width: contentWidthPx, height: contentHeightPx };
+}
+
+// DOM adapter: draws (or removes) one Slot's placed content as an <img>
+// inside the `.pl-slot` element renderSlots() created for it. `content` is
+// `{ url, width, height } | null` — typically a Source Engine thumbnail or
+// §12.7 mid-res preview cache entry; `null` (no Source assigned, or its
+// preview hasn't rendered yet) removes any existing content element.
+// `slotWidthPx`/`slotHeightPx` are passed in explicitly (from
+// computeSlotPx(), the same values renderSlots() itself used) rather than
+// read back off the DOM, so this stays a pure "apply already-computed
+// numbers" step per the file's own §4.1 convention.
+export function renderSlotContent(slotEl, slot, content, slotWidthPx, slotHeightPx) {
+  let contentEl = slotEl.querySelector(':scope > .pl-slot-content');
+  if (!content) {
+    if (contentEl) contentEl.remove();
+    return null;
+  }
+  if (!contentEl) {
+    contentEl = document.createElement('img');
+    contentEl.className = 'pl-slot-content';
+    contentEl.style.position = 'absolute';
+    contentEl.style.left = '0';
+    contentEl.style.top = '0';
+    contentEl.style.transformOrigin = '0 0';
+    slotEl.appendChild(contentEl);
+  }
+  if (contentEl.src !== content.url) contentEl.src = content.url;
+
+  const { matrix, width, height } = computeSlotContentTransform(slot, content.width, content.height, slotWidthPx, slotHeightPx);
+  contentEl.style.width = `${width}px`;
+  contentEl.style.height = `${height}px`;
+  contentEl.style.transform = `matrix(${matrix.join(',')})`;
   return contentEl;
 }
 

@@ -8,7 +8,7 @@
 // caching, no concurrency limiting, no docId bookkeeping) — that all stays
 // in sources.js, which is unit-testable.
 
-import { computeThumbnailSize } from './sources.js';
+import { computeThumbnailSize, computePreviewCanvasSize, computeImagePreviewSize } from './sources.js';
 
 function canvasToObjectUrl(canvas) {
   return new Promise((resolve, reject) => {
@@ -58,6 +58,62 @@ export async function renderPdfPageThumbnail({ page, targetLongEdgePx }) {
   // resources right after use while leaving the parent document (and thus
   // sibling pages / future re-renders) alive.
   page.cleanup();
+
+  return { url, width: canvas.width, height: canvas.height, release };
+}
+
+// deps.renderPdfPagePreview for createSourceEngine() — Phase 5's §12.7
+// mid-resolution "Canvas Preview" tier. Same shape as
+// renderPdfPageThumbnail() above (re-fetching a viewport at the size
+// computePreviewCanvasSize() picks instead of computeThumbnailSize()'s), so
+// it also re-`page.cleanup()`s afterward — this is a lazily-rendered,
+// LRU-cached, on-demand render, not something kept hot.
+export async function renderPdfPagePreview({ page, targetDpi, maxLongEdgePx }) {
+  const viewportAtScale1 = page.getViewport({ scale: 1 });
+  const { width: targetW } = computePreviewCanvasSize(
+    viewportAtScale1.width,
+    viewportAtScale1.height,
+    { targetDpi, maxLongEdgePx },
+  );
+  const scale = targetW / viewportAtScale1.width;
+  const viewport = page.getViewport({ scale });
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(viewport.width);
+  canvas.height = Math.round(viewport.height);
+  const ctx = canvas.getContext('2d');
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  const url = await canvasToObjectUrl(canvas);
+  const release = releaseCanvasThumbnail(canvas, url);
+  page.cleanup();
+
+  return { url, width: canvas.width, height: canvas.height, release };
+}
+
+// deps.renderImagePreview for createSourceEngine(). Unlike the PDF path
+// above, there is no still-open "page" to re-fetch for an image — the
+// decoded ImageBitmap from loadImageFile() is transient and already closed
+// once its thumbnail is drawn (render-adapters' own renderImageThumbnail,
+// below) — so this re-decodes from the pristine bytes SourceBinaryStore
+// still holds (image decode does not detach/transfer, unlike PDF.js; see
+// decodeImage()'s own comment). Sized via computeImagePreviewSize() (a
+// plain maxLongEdgePx cap), NOT computePreviewCanvasSize()'s DPI target —
+// naturalWidth/Height here are pixels, not pt (see decision_log D-012).
+export async function renderImagePreview({ bytes, naturalWidth, naturalHeight, maxLongEdgePx }) {
+  const blob = new Blob([bytes]);
+  const bitmap = await createImageBitmap(blob);
+  const { width: targetW, height: targetH } = computeImagePreviewSize(naturalWidth, naturalHeight, { maxLongEdgePx });
+
+  const canvas = document.createElement('canvas');
+  canvas.width = targetW;
+  canvas.height = targetH;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(bitmap, 0, 0, targetW, targetH);
+  bitmap.close();
+
+  const url = await canvasToObjectUrl(canvas);
+  const release = releaseCanvasThumbnail(canvas, url);
 
   return { url, width: canvas.width, height: canvas.height, release };
 }

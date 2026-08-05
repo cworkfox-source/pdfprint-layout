@@ -5,6 +5,7 @@ import {
   createRenderQueue,
   computeThumbnailSize,
   computePreviewCanvasSize,
+  computeImagePreviewSize,
   THUMBNAIL_LONG_EDGE_PX,
 } from './sources.js';
 import { createBinaryStore, isArrayBufferDetached } from './binary-store.js';
@@ -34,6 +35,21 @@ test('computePreviewCanvasSize clamps to maxLongEdgePx for a huge page', () => {
   assert.equal(Math.max(size.width, size.height), 4096);
   assert.equal(size.width, 4096);
   assert.equal(size.height, 2048);
+});
+
+test('computeImagePreviewSize leaves a small image at its native pixel size (no DPI upscale)', () => {
+  assert.deepEqual(computeImagePreviewSize(800, 600), { width: 800, height: 600 });
+});
+
+test('computeImagePreviewSize caps a huge image at maxLongEdgePx, preserving aspect ratio', () => {
+  const size = computeImagePreviewSize(10000, 5000, { maxLongEdgePx: 4096 });
+  assert.equal(size.width, 4096);
+  assert.equal(size.height, 2048);
+});
+
+test('computeImagePreviewSize rejects non-positive dimensions', () => {
+  assert.throws(() => computeImagePreviewSize(0, 100));
+  assert.throws(() => computeImagePreviewSize(100, -1));
 });
 
 // --- render queue (§12.5 concurrency cap) --------------------------------
@@ -279,4 +295,102 @@ test('loadImageFile throws without decodeImage/renderImageThumbnail configured',
   const engine = createSourceEngine({ binaryStore: createBinaryStore() });
   const file = new File([new Uint8Array([1])], 'x.png');
   await assert.rejects(() => engine.loadImageFile(file));
+});
+
+// --- ensurePreview / §12.7 mid-resolution Canvas Preview tier (Phase 5) ------
+
+function makePreviewSpy(prefix = 'preview') {
+  const released = [];
+  const calls = [];
+  const render = async (args) => {
+    calls.push(args);
+    const url = `blob:${prefix}-${calls.length}`;
+    return { url, width: 999, height: 999, release: () => released.push(url) };
+  };
+  return { render, calls, released };
+}
+
+test('ensurePreview lazily renders a pdf-page Source on first call, then serves the cached entry', async () => {
+  const pdfjsLib = makeFakePdfjsLib([{ view: [0, 0, 100, 100] }]);
+  const thumb = makeThumbnailSpy();
+  const preview = makePreviewSpy();
+  const engine = createSourceEngine({
+    binaryStore: createBinaryStore(),
+    renderPdfPageThumbnail: thumb.render,
+    renderPdfPagePreview: preview.render,
+  });
+
+  const [source] = await engine.loadPdfFile(makePdfFile(), { pdfjsLib });
+  assert.equal(engine.getPreview(source.id), null); // not rendered yet — lazy
+
+  const result = await engine.ensurePreview(source);
+  assert.equal(result.url, 'blob:preview-1');
+  assert.equal(preview.calls.length, 1);
+  assert.equal(engine.getPreview(source.id).url, 'blob:preview-1');
+
+  // second call serves the cache, doesn't render again
+  await engine.ensurePreview(source);
+  assert.equal(preview.calls.length, 1);
+});
+
+test('ensurePreview dedupes concurrent calls for the same Source into one render', async () => {
+  const pdfjsLib = makeFakePdfjsLib([{ view: [0, 0, 100, 100] }]);
+  const thumb = makeThumbnailSpy();
+  const preview = makePreviewSpy();
+  const engine = createSourceEngine({
+    binaryStore: createBinaryStore(),
+    renderPdfPageThumbnail: thumb.render,
+    renderPdfPagePreview: preview.render,
+  });
+
+  const [source] = await engine.loadPdfFile(makePdfFile(), { pdfjsLib });
+  const [a, b] = await Promise.all([engine.ensurePreview(source), engine.ensurePreview(source)]);
+  assert.equal(preview.calls.length, 1);
+  assert.equal(a.url, b.url);
+});
+
+test('ensurePreview renders an image Source from SourceBinaryStore bytes (not the transient decode bitmap)', async () => {
+  const decodeImage = async () => ({ width: 800, height: 600, bitmap: { close: () => {} } });
+  const thumb = makeThumbnailSpy();
+  const renderImageThumbnail = async ({ targetLongEdgePx }) => ({ url: 'blob:thumb', width: targetLongEdgePx, height: targetLongEdgePx, release: () => {} });
+  const preview = makePreviewSpy();
+  const binaryStore = createBinaryStore();
+  const engine = createSourceEngine({
+    binaryStore, decodeImage, renderImageThumbnail, renderImagePreview: preview.render,
+  });
+
+  const file = new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' });
+  const source = await engine.loadImageFile(file);
+
+  const result = await engine.ensurePreview(source);
+  assert.equal(result.url, 'blob:preview-1');
+  assert.equal(preview.calls[0].naturalWidth, 800);
+  assert.equal(preview.calls[0].naturalHeight, 600);
+  assert.ok(preview.calls[0].bytes); // the ORIGINAL bytes, not the closed decode bitmap
+});
+
+test('ensurePreview throws when the required renderer dep is missing for that Source kind', async () => {
+  const pdfjsLib = makeFakePdfjsLib([{ view: [0, 0, 100, 100] }]);
+  const thumb = makeThumbnailSpy();
+  const engine = createSourceEngine({ binaryStore: createBinaryStore(), renderPdfPageThumbnail: thumb.render });
+  const [source] = await engine.loadPdfFile(makePdfFile(), { pdfjsLib });
+  assert.throws(() => engine.ensurePreview(source), /renderPdfPagePreview/);
+});
+
+test('releaseSource also releases a cached preview', async () => {
+  const pdfjsLib = makeFakePdfjsLib([{ view: [0, 0, 100, 100] }]);
+  const thumb = makeThumbnailSpy();
+  const preview = makePreviewSpy();
+  const engine = createSourceEngine({
+    binaryStore: createBinaryStore(),
+    renderPdfPageThumbnail: thumb.render,
+    renderPdfPagePreview: preview.render,
+  });
+
+  const [source] = await engine.loadPdfFile(makePdfFile(), { pdfjsLib });
+  await engine.ensurePreview(source);
+  await engine.releaseSource(source);
+
+  assert.equal(engine.getPreview(source.id), null);
+  assert.deepEqual(preview.released, ['blob:preview-1']);
 });

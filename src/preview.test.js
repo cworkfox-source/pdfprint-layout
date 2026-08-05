@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPaperSettings, createSlot } from './model.js';
+import { applyToPoint, boundingBoxOfTransformedRect } from './geometry.js';
 import {
   resolveZoom,
   computeContentAreaPt,
   computePaperPreviewLayout,
   computeSlotPx,
+  computeSlotContentTransform,
   PX_PER_PT_AT_ZOOM_1,
 } from './preview.js';
 
@@ -125,4 +127,67 @@ test('computeSlotPx: a full-bleed slot (0,0,1,1) exactly fills the content area'
   const slot = createSlot({ x: 0, y: 0, w: 1, h: 1 });
   const px = computeSlotPx(slot, 300, 500);
   assert.deepEqual(px, { x: 0, y: 0, width: 300, height: 500 });
+});
+
+// --- computeSlotContentTransform (§10.1/§10.2/§6.6, Phase 5) ----------------
+
+test('computeSlotContentTransform: contain — a landscape image inside a square slot is letterboxed, not cropped', () => {
+  const slot = createSlot({ fitMode: 'contain' });
+  const { matrix, width, height } = computeSlotContentTransform(slot, 200, 100, 100, 100); // 2:1 content in a 1:1 slot
+  assert.equal(width, 200);
+  assert.equal(height, 100);
+  const box = boundingBoxOfTransformedRect(matrix, width, height);
+  // contain must fit inside the 100x100 slot on both axes
+  assert.ok(box.maxX - box.minX <= 100 + 1e-6);
+  assert.ok(box.maxY - box.minY <= 100 + 1e-6);
+  // and the constraining axis (width, since content is wider than tall)
+  // must exactly touch the slot's own width
+  assert.ok(Math.abs((box.maxX - box.minX) - 100) < 1e-6);
+});
+
+test('computeSlotContentTransform: cover — a landscape image inside a square slot fills it and overflows one axis (clip handles the rest, §6.6)', () => {
+  const slot = createSlot({ fitMode: 'cover' });
+  const { matrix, width, height } = computeSlotContentTransform(slot, 200, 100, 100, 100);
+  const box = boundingBoxOfTransformedRect(matrix, width, height);
+  // cover must fill both axes completely (may overflow, that's the point)
+  assert.ok(box.maxX - box.minX >= 100 - 1e-6);
+  assert.ok(box.maxY - box.minY >= 100 - 1e-6);
+});
+
+test('computeSlotContentTransform: stretch — non-uniform scale exactly fills the slot on both axes regardless of aspect ratio', () => {
+  const slot = createSlot({ fitMode: 'stretch' });
+  const { matrix, width, height } = computeSlotContentTransform(slot, 200, 50, 100, 100);
+  const box = boundingBoxOfTransformedRect(matrix, width, height);
+  assert.ok(Math.abs((box.maxX - box.minX) - 100) < 1e-6);
+  assert.ok(Math.abs((box.maxY - box.minY) - 100) < 1e-6);
+});
+
+test('computeSlotContentTransform: rotation is local to the slot (matrix maps the slot\'s own 0,0 origin, no outer offset)', () => {
+  const slot = createSlot({ fitMode: 'contain', rotation: 90 });
+  const { matrix, width, height } = computeSlotContentTransform(slot, 100, 100, 100, 100);
+  const box = boundingBoxOfTransformedRect(matrix, width, height);
+  // still fits within the 100x100 slot box, near its own origin (not offset
+  // by some outer content-area position — this is the "local matrix" contract)
+  assert.ok(box.minX >= -1e-6 && box.maxX <= 100 + 1e-6);
+  assert.ok(box.minY >= -1e-6 && box.maxY <= 100 + 1e-6);
+});
+
+test('computeSlotContentTransform: offset shifts the content by a fraction of the SLOT\'s own width/height (§6.4)', () => {
+  const base = createSlot({ fitMode: 'stretch' });
+  const offset = createSlot({ fitMode: 'stretch', offsetX: 0.1, offsetY: 0 });
+  const t0 = computeSlotContentTransform(base, 100, 100, 100, 100);
+  const t1 = computeSlotContentTransform(offset, 100, 100, 100, 100);
+  const p0 = applyToPoint(t0.matrix, 0, 0);
+  const p1 = applyToPoint(t1.matrix, 0, 0);
+  assert.ok(Math.abs((p1.x - p0.x) - 10) < 1e-6); // 0.1 * slotWidthPx(100) = 10px
+  assert.ok(Math.abs(p1.y - p0.y) < 1e-6);
+});
+
+test('computeSlotContentTransform: flipX mirrors the content horizontally around its own center', () => {
+  const slot = createSlot({ fitMode: 'stretch', flipX: true });
+  const { matrix, width, height } = computeSlotContentTransform(slot, 100, 100, 100, 100);
+  const left = applyToPoint(matrix, 0, 0);
+  const right = applyToPoint(matrix, width, 0);
+  // flipped: the content's own left edge (x=0) now renders on the right
+  assert.ok(left.x > right.x);
 });

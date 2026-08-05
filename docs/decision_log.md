@@ -540,3 +540,133 @@ free-layout.js 接上 `store.js` 時發現一個既有實作缺陷:
 使用者對「水平/垂直分割」的實際方向有不同預期時(例如透過操作實測發現
 與直覺不符)重新檢視;§9.5 加入參考線/Grid 吸附(Guides 資料模型)時,
 需要決定它們與既有「起始邊/結束邊/中心線」候選集合的優先序如何合併。
+
+## D-012 — Phase 5 Source Placement:圖片 Preview 尺寸單位、§12.7 中解析度 Canvas Preview 的實際渲染時機、Preview 端 slotContentMatrix 的座標原點取法
+
+### Date
+2026-08-05
+
+### Topic
+架構 / 資料模型 / 渲染
+
+### Context
+實作 Phase 5(plan.md §10.1/§10.2/§6.6)——把 Source 拖曳放入 Slot 並套用
+Fit/Scale/Rotation/Offset/Flip/Clip——時遇到三個缺口:
+
+1. Phase 2 的 `computePreviewCanvasSize(naturalWidthPt, naturalHeightPt, {targetDpi})`
+   假設輸入是 pt(以 `targetDpi/72` 換算成像素),對 PDF 頁面正確(pdf.js
+   `getViewport({scale:1})` 的寬高本來就是 pt)。但 `src/sources.js` 的
+   `loadImageFile()` 從一開始(Phase 2)就把 `decodeImage()`(即
+   `createImageBitmap()`)回傳的**像素**寬高直接指派給 `Source.naturalWidth/
+   naturalHeight`,完全沒有 pt 換算——一張相片沒有內建的實體尺寸,只有
+   像素數。Phase 2 的 fit 計算(`computeFitScale`,純比例運算)不受這個
+   單位混用影響而沒被發現,但 Phase 5 若直接把 `computePreviewCanvasSize()`
+   套用在圖片的像素寬高上,150 DPI 的換算(`×2.08`)對像素輸入毫無意義。
+2. Phase 2 的 `previewCache`(§12.7 中解析度 Canvas Preview 分層)當時只是
+   「立好架子」,程式碼註解明講「populated starting whichever later phase
+   actually draws Sources onto the paper canvas」——但沒說這個 render 要
+   在什麼時機觸發、從哪裡取得可重新 render 的來源(PDF 頁面 proxy 用完即可
+   丟、圖片的 decode bitmap 在縮圖產生後已 `close()`)。
+3. §4.3 規定 Preview 與 Export 都只能透過 geometry.js 的
+   `slotContentMatrix()` 取得座標,不得各自實作——但 Phase 5 的 Preview
+   是把內容 `<img>` 當成 DOM 子節點放進「已經被 `renderSlots()` 定位好、
+   且已設 `overflow:hidden`」的 `.pl-slot` 容器裡,所以矩陣要用「相對容器
+   自己 (0,0)」的座標,還是「相對整個內容區」的絕對座標,plan.md 沒有
+   明確講(它假設的是單一扁平畫布,比較接近 Export 的情境)。
+
+### Alternatives Considered
+(1) 圖片 Preview 尺寸單位:
+  A. 圖片維持像素單位,§12.7 的中解析度 tier 對圖片改用「單純以
+     `maxLongEdgePx` 封頂、不足時保持原始像素、不套用任何 DPI 換算」的
+     獨立函式(`computeImagePreviewSize`),PDF 頁面繼續用既有的
+     `computePreviewCanvasSize`(DPI 換算)。
+  B. 回頭把 `loadImageFile()` 改成也存 pt(例如假設 96 DPI 換算圖片像素
+     為 pt),讓所有 Source 的 `naturalWidth/Height` 單位一致。
+  C. 忽略單位不一致,直接讓圖片也走 `computePreviewCanvasSize()`(只是靠
+     `maxLongEdgePx` 封頂救回不合理的放大結果)。
+
+(2) §12.7 中解析度 Preview 的渲染時機:
+  A. Lazy:一個 Source 被指派給某個 Slot(`setSlotSourceAction`)之後,
+     由呼叫端主動呼叫 `engine.ensurePreview(source)`——對 PDF 頁面重新
+     `pdfDoc.getPage()`(文件在 Source 存在期間本來就開著,§12.5/D-009 的
+     ref-count 機制保證這點),對圖片則從 `SourceBinaryStore` 的原始
+     bytes 重新 decode(而非依賴縮圖用完即關閉的 bitmap)。
+  B. 在 Source 載入當下就順便 render 好中解析度版本(跟縮圖一起做)。
+  C. 完全不做,Phase 5 的 Preview 永遠只用縮圖(200px 長邊),把
+     `previewCache`/`computePreviewCanvasSize` 的實際串接留給更後面的
+     Phase。
+
+(3) Preview 端 `slotContentMatrix()` 的原點:
+  A. 呼叫時 `slotX=slotY=0`(相對 Slot 自己的區域),回傳的矩陣直接當成
+     該 `<img>` 的 CSS `transform`,平移量的單位沿用呼叫時傳入的 px 值;
+     Export(Phase 7)日後改用真正的絕對 slotX/slotY 呼叫同一函式,
+     兩者是「同一函式、不同呼叫參數」,不是兩套實作。
+  B. 一律傳入絕對座標(相對整個內容區),讓 Preview 的 `<img>` 直接掛在
+     內容區容器下,不掛在 `.pl-slot` 內部,另外用 CSS clip-path 而非
+     `overflow:hidden` 做裁切。
+
+### Selected Solution
+(1) A。(2) A。(3) A。
+
+### Reason
+(1)A 案不需要改動 Phase 2 已經測試/上線的 `loadImageFile()` 行為
+(不製造 D-009 之後的第二次「回頭改資料模型」),且誠實反映「圖片沒有
+實體尺寸」這個事實,而不是像 B 案那樣編造一個任意的假想 DPI;C 案表面上
+能動,但語意上「150 DPI」對像素輸入沒有意義,容易在日後被誤用。
+(2)A 案完全符合 §12.5「Lazy Rendering……只 render 目前可見/使用中的
+頁面」的精神——一個 Source 在被放進 Slot 之前根本不需要中解析度版本;
+B 案會讓每個載入的 Source 都多一次 render 成本,即使使用者從未把它放進
+任何 Slot(違背 Lazy 原則,也是 Phase 2 特意不做這件事的原因);C 案會讓
+Phase 2 特地立好的 `previewCache`/`computePreviewCanvasSize` 一直是死碼,
+且放大版 Slot 用 200px 縮圖會明顯模糊。
+(3)A 案讓 Preview 端不需要重新計算「Slot 在內容區裡的絕對位置」——那份
+計算 `renderSlots()`/`computeSlotPx()` 已經做過且已經定位好 DOM 容器,
+重複計算是浪費也是雙重實作風險;更重要的是它保留了「唯一一個
+`slotContentMatrix()` 函式,靠參數區分場合」的 §4.3 契約精神,Export
+改一個參數就能重用,不必新增函式。B 案等於在 Preview 端提前解決 Export
+才需要面對的「單一扁平畫布」問題,徒增複雜度,且 `overflow:hidden` 已經
+是 Phase 3/4 一路沿用的裁切機制,沒有理由在 Phase 5 換掉。
+
+### Consequences
+- `src/sources.js` 新增 `computeImagePreviewSize(naturalWidth, naturalHeight,
+  {maxLongEdgePx})`(純函式,只封頂不做 DPI 換算),與既有
+  `computePreviewCanvasSize()`(DPI 換算,供 PDF 頁面用)並存,兩者呼叫處
+  以 Source `kind` 區分,已在函式註解交叉引用本決議避免日後誤用。
+- `src/sources.js` 的 `createSourceEngine()` 新增 `ensurePreview(source)`/
+  `getPreview(sourceId)`/`waitForPreview(sourceId)`,與縮圖共用同一個
+  `renderQueue`(§12.5 併發上限仍是全域一個,不是每層各自一個);
+  `releaseSource()`(Phase 2 已寫好的邏輯,原本就會 release
+  `previewCache`)不需改動即可正確運作。`src/render-adapters.js` 新增
+  `renderPdfPagePreview()`(比照 `renderPdfPageThumbnail()`,改用
+  `computePreviewCanvasSize`)與 `renderImagePreview()`(從
+  `SourceBinaryStore` 原始 bytes 重新 `createImageBitmap()`,改用
+  `computeImagePreviewSize`)。
+- `src/preview.js` 新增 `computeSlotContentTransform()`(純函式,呼叫
+  `geometry.js` 既有的 `slotContentMatrix()`,`slotX=slotY=0`)與
+  `renderSlotContent()`(DOM adapter,將回傳矩陣寫入 `<img>` 的 CSS
+  `transform`);`renderSlots()` 額外對每個 `.pl-slot` 設
+  `overflow:hidden`(§6.6 裁切,先前 Phase 3/4 只畫外框、不需要裁切內容
+  故未設)。
+- `src/slot-content.js`(新檔案)只提供 `setSlotSource`/`setSlotFitMode`/
+  `setSlotScale`/`setSlotRotation`/`rotateSlotContent`/`setSlotOffset`/
+  `setSlotFlip`/`clearSlotContent` 這些 Slot 欄位層級的純編輯函式,刻意
+  **不**檢查 `locked`——§10.3 原文只規定鎖定擋 Move/Resize/Delete,沒提到
+  內容編輯,已在檔案註解記錄此範圍界定而非預設套用 D-011 的鎖定慣例。
+  `clearSlotContent()` 額外決定把 Fit/Scale/Rotation/Offset/Flip 一併重設
+  回 `createSlot()` 預設值(不只清 `sourceId`),讓下一次放入的新內容從
+  乾淨狀態開始,不會繼承前一個內容調過的參數。
+- `dev/placement.html`(新檔案,Phase 5 dev harness):Gallery 縮圖可拖曳
+  到 Slot 上放置、Properties Panel(Fit/Scale/Rotate 90°/Offset 滑桿/
+  Flip/清除內容),以 Playwright 實測(合成 3 頁 PDF 含 `/Rotate 90` +
+  合成雙色 PNG)驗證 contain/cover/stretch 三種 fit、旋轉對 fit 目標軸的
+  對調(§6.3)、Offset 滑桿拖曳的 History coalescing(§7.2,一次拖曳只
+  產生一筆 undo)、Flip、清除內容會移除 DOM 內容節點且重置欄位、圖片與
+  PDF 兩種 Source 都能正確走到 §12.7 中解析度 Preview。
+
+### Future Review Conditions
+Phase 7 Export 實作 `slotContentMatrix()` 的另一種呼叫方式(絕對
+slotX/slotY)時,回頭確認兩處呼叫的參數差異只在原點、其餘欄位(fitMode/
+scale/rotation/offset/flip)完全共用,佐證 §4.3 等價性契約沒有被打破;
+若日後圖片 Source 需要「實際列印尺寸」(例如使用者輸入照片的實體寬高做
+DPI 感知的排版),需要回頭重新設計 §5.2 Source 的尺寸欄位語意,而不是
+繼續讓圖片停留在純像素單位。

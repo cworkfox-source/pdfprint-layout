@@ -12,6 +12,14 @@ import {
   splitSlotVerticalAction,
   mergeSlotsAction,
   setSelectionAction,
+  setSlotSourceAction,
+  setSlotFitModeAction,
+  setSlotScaleAction,
+  setSlotRotationAction,
+  rotateSlotContentAction,
+  setSlotOffsetAction,
+  setSlotFlipAction,
+  clearSlotContentAction,
 } from './reducers.js';
 
 function makeTwoPageState() {
@@ -142,4 +150,69 @@ test('full split -> merge -> undo x2 round-trip restores the original single slo
 test('an unknown pageId throws instead of silently doing nothing', () => {
   const store = createStore(makeTwoPageState());
   assert.throws(() => store.commit(moveSlotsAction('does-not-exist', ['a1'], 0.1, 0), null), /No page with id/);
+});
+
+// --- Source Placement actions (§10.1/§10.2, Phase 5) ------------------------
+
+test('setSlotSourceAction assigns a Source to the correct page/slot only', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(setSlotSourceAction('page-a', 'a1', 'src-1'), null);
+  const [pageA, pageB] = store.getState().pages;
+  assert.equal(pageA.slots[0].sourceId, 'src-1');
+  assert.equal(pageB.slots[0].sourceId, null); // untouched
+});
+
+test('setSlotFitModeAction / setSlotScaleAction / setSlotRotationAction / setSlotOffsetAction / setSlotFlipAction each update one field', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(setSlotFitModeAction('page-a', 'a1', 'cover'), null);
+  store.commit(setSlotScaleAction('page-a', 'a1', 1.5), null);
+  store.commit(setSlotRotationAction('page-a', 'a1', 90), null);
+  store.commit(setSlotOffsetAction('page-a', 'a1', 0.2, -0.1), null);
+  store.commit(setSlotFlipAction('page-a', 'a1', true, true), null);
+
+  const slot = store.getState().pages[0].slots[0];
+  assert.equal(slot.fitMode, 'cover');
+  assert.equal(slot.scale, 1.5);
+  assert.equal(slot.rotation, 90);
+  assert.equal(slot.offsetX, 0.2);
+  assert.equal(slot.offsetY, -0.1);
+  assert.equal(slot.flipX, true);
+  assert.equal(slot.flipY, true);
+});
+
+test('rotateSlotContentAction rotates relative to the current value', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(rotateSlotContentAction('page-a', 'a1', 90), null);
+  store.commit(rotateSlotContentAction('page-a', 'a1', 90), null);
+  assert.equal(store.getState().pages[0].slots[0].rotation, 180);
+});
+
+test('clearSlotContentAction resets Source + transform but leaves the other slot on the page alone', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(setSlotSourceAction('page-a', 'a1', 'src-1'), null);
+  store.commit(setSlotRotationAction('page-a', 'a1', 180), null);
+  store.commit(clearSlotContentAction('page-a', 'a1'), null);
+
+  const slot = store.getState().pages[0].slots[0];
+  assert.equal(slot.sourceId, null);
+  assert.equal(slot.rotation, 0);
+  assert.equal(store.getState().pages[1].slots[0].sourceId, null);
+});
+
+test('setSlotRotationAction rejects a non-MVP angle and leaves history untouched', () => {
+  const store = createStore(makeTwoPageState());
+  const depthBefore = store.historyDepth();
+  assert.throws(() => store.commit(setSlotRotationAction('page-a', 'a1', 45), null), /MVP only supports/);
+  assert.deepEqual(store.historyDepth(), depthBefore);
+});
+
+test('Source Placement edits coalesce like Free Layout drags (§7.2) — e.g. an Offset slider drag', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(setSlotOffsetAction('page-a', 'a1', 0.1, 0), null, { coalesceKey: 'offset:a1' });
+  store.commit(setSlotOffsetAction('page-a', 'a1', 0.2, 0), null, { coalesceKey: 'offset:a1' });
+  store.commit(setSlotOffsetAction('page-a', 'a1', 0.3, 0), null, { coalesceKey: 'offset:a1' });
+
+  assert.equal(store.getState().pages[0].slots[0].offsetX, 0.3);
+  store.undo();
+  assert.equal(store.getState().pages[0].slots[0].offsetX, 0); // one undo -> all the way back
 });

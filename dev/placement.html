@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>Phase 5 dev harness — Source Placement</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 1rem; color: #222; }
+  h1 { font-size: 1.1rem; }
+  .layout { display: flex; gap: 1rem; align-items: flex-start; }
+  .controls { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+  .controls label { display: flex; flex-direction: column; font-size: 12px; gap: 2px; }
+  #gallery { display: flex; flex-wrap: wrap; gap: 8px; border: 1px solid #ccc; padding: 8px; min-height: 100px; background: #fafafa; width: 220px; }
+  .tile { width: 90px; border: 1px solid #ddd; background: #fff; padding: 4px; font-size: 10px; word-break: break-all; cursor: grab; }
+  .tile img { width: 100%; height: 70px; object-fit: contain; background: #eee; display: block; }
+  .tile .placeholder { width: 100%; height: 70px; background: #eee; display: flex; align-items: center; justify-content: center; color: #999; font-size: 9px; }
+  .tile.dragging { opacity: 0.4; }
+  #viewport { border: 1px solid #ccc; overflow: auto; height: 65vh; padding: 2rem; background: #eee; flex: 1; }
+  #readout { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre; margin-top: 0.5rem; max-height: 160px; overflow: auto; }
+  .pl-paper { margin: 0 auto; }
+  .pl-slot { cursor: pointer; }
+  .pl-slot.selected { outline: 2px solid #06c !important; }
+  .pl-slot.drop-target { outline: 2px dashed #0a7d28 !important; background: rgba(10,125,40,0.15) !important; }
+  #props { width: 260px; border: 1px solid #ccc; padding: 10px; background: #fafafa; font-size: 12px; }
+  #props label { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+  #props .row { display: flex; gap: 6px; }
+  #props .row button { flex: 1; }
+  #log { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; margin-top: 1rem; border-top: 1px solid #ccc; padding-top: 0.5rem; max-height: 160px; overflow: auto; }
+  .pass { color: #0a7d28; }
+  .fail { color: #b00020; }
+</style>
+</head>
+<body>
+<h1>Phase 5 dev harness — 不是產品 UI，僅供人工／自動化檢查 Source Placement（見 docs/plan.md Phase 5）</h1>
+
+<div class="controls">
+  <label>PDF / Image 檔案
+    <input id="file-input" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,image/*,application/pdf">
+  </label>
+  <button id="reset-4up">Reset: 4up</button>
+  <button id="btn-undo">Undo (Ctrl+Z)</button>
+  <button id="btn-redo">Redo (Ctrl+Y)</button>
+</div>
+
+<div class="layout">
+  <div id="gallery"></div>
+
+  <div id="viewport"></div>
+
+  <div id="props">
+    <div id="props-empty">選取一個已放置內容的 Slot 以編輯</div>
+    <div id="props-fields" style="display:none">
+      <label>Fit Mode（§10.2/§6.6）
+        <select id="prop-fit">
+          <option value="contain">Contain（Fit，可能留白）</option>
+          <option value="cover">Cover（Fill，裁切）</option>
+          <option value="stretch">Stretch（拉伸變形）</option>
+        </select>
+      </label>
+      <label>Scale（在 Fit 基礎上再乘）
+        <input id="prop-scale" type="number" min="0.1" step="0.1">
+      </label>
+      <div class="row">
+        <button id="prop-rotate">Rotate 90° (§10.2 MVP: 0/90/180/270)</button>
+      </div>
+      <div>Rotation: <span id="prop-rotation-readout">0</span>°</div>
+      <label>Offset X（Slot 寬度比例，§6.4）
+        <input id="prop-offset-x" type="range" min="-0.5" max="0.5" step="0.01">
+      </label>
+      <label>Offset Y（Slot 高度比例）
+        <input id="prop-offset-y" type="range" min="-0.5" max="0.5" step="0.01">
+      </label>
+      <label><input id="prop-flip-x" type="checkbox"> Flip X</label>
+      <label><input id="prop-flip-y" type="checkbox"> Flip Y</label>
+      <div class="row">
+        <button id="prop-clear">清除內容（§10.3）</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="readout"></div>
+<div id="log"></div>
+
+<script type="module">
+  import * as pdfjsLib from '/vendor/pdfjs/pdf.mjs';
+  import { createStore } from '/src/store.js';
+  import { createAppState, createPage } from '/src/model.js';
+  import {
+    computePaperPreviewLayout, resolveZoom, renderPaper, renderSlots, renderSlotContent, computeSlotPx,
+  } from '/src/preview.js';
+  import { generatePresetSlots, createSlotsFromRects } from '/src/layout.js';
+  import {
+    setSlotSourceAction, setSlotFitModeAction, setSlotScaleAction, rotateSlotContentAction,
+    setSlotOffsetAction, setSlotFlipAction, clearSlotContentAction, setSelectionAction,
+  } from '/src/reducers.js';
+  import { createSourceEngine } from '/src/sources.js';
+  import {
+    renderPdfPageThumbnail, decodeImage, renderImageThumbnail, renderPdfPagePreview, renderImagePreview,
+  } from '/src/render-adapters.js';
+  import { createBinaryStore } from '/src/binary-store.js';
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.mjs';
+
+  const $ = (id) => document.getElementById(id);
+  const gallery = $('gallery');
+  const viewport = $('viewport');
+  const logEl = $('log');
+  const PAGE_ID = 'page-1';
+
+  const log = (msg, ok) => {
+    const line = document.createElement('div');
+    line.className = ok === undefined ? '' : (ok ? 'pass' : 'fail');
+    line.textContent = `${ok === undefined ? '·' : (ok ? '[PASS]' : '[FAIL]')} ${msg}`;
+    logEl.appendChild(line);
+    console.log(msg);
+  };
+
+  const binaryStore = createBinaryStore();
+  const sources = new Map(); // sourceId -> Source
+  const engine = createSourceEngine({
+    binaryStore,
+    renderPdfPageThumbnail,
+    decodeImage,
+    renderImageThumbnail,
+    renderPdfPagePreview,
+    renderImagePreview,
+    onThumbnailReady: (sourceId) => {
+      const img = document.querySelector(`.tile[data-source-id="${sourceId}"] img`);
+      const placeholder = document.querySelector(`.tile[data-source-id="${sourceId}"] .placeholder`);
+      const thumb = engine.getThumbnail(sourceId);
+      if (img && thumb) {
+        img.src = thumb.url;
+        img.style.display = '';
+        if (placeholder) placeholder.style.display = 'none';
+      }
+      render();
+    },
+    onThumbnailError: (sourceId, err) => log(`縮圖失敗 ${sourceId}: ${err.message}`, false),
+  });
+
+  const paper = { size: 'A4', orientation: 'portrait', marginTopPt: 28, marginBottomPt: 28, marginLeftPt: 28, marginRightPt: 28, gapHorizontalPt: 10, gapVerticalPt: 10 };
+
+  function presetSlots(presetId) {
+    const layout = computePaperPreviewLayout(paper, 1);
+    const rects = generatePresetSlots(presetId, {
+      contentAreaWidthPt: layout.contentAreaPt.width,
+      contentAreaHeightPt: layout.contentAreaPt.height,
+      gapHorizontalPt: paper.gapHorizontalPt,
+      gapVerticalPt: paper.gapVerticalPt,
+    });
+    return createSlotsFromRects(rects);
+  }
+
+  const page = createPage({ id: PAGE_ID, paper, slots: presetSlots('4up') });
+  const store = createStore(createAppState({ pages: [page] }));
+
+  let selection = null; // one slotId, or null
+  let lastLayout = null;
+
+  function currentSlots() {
+    return store.getState().pages.find((p) => p.id === PAGE_ID).slots;
+  }
+
+  function selectedSlot() {
+    return selection ? currentSlots().find((s) => s.id === selection) ?? null : null;
+  }
+
+  // Resolves the best available visual for a Source right now: the §12.7
+  // mid-res Canvas Preview once ensurePreview() has rendered it, falling
+  // back to the (lower-res, but usually ready sooner) Gallery thumbnail —
+  // never blocks rendering on either being ready.
+  function resolveContent(sourceId) {
+    if (!sourceId) return null;
+    return engine.getPreview(sourceId) ?? engine.getThumbnail(sourceId) ?? null;
+  }
+
+  function renderProps() {
+    const slot = selectedSlot();
+    const has = !!(slot && slot.sourceId);
+    $('props-empty').style.display = has ? 'none' : '';
+    $('props-fields').style.display = has ? '' : 'none';
+    if (!has) return;
+    $('prop-fit').value = slot.fitMode;
+    $('prop-scale').value = slot.scale;
+    $('prop-rotation-readout').textContent = slot.rotation;
+    $('prop-offset-x').value = slot.offsetX;
+    $('prop-offset-y').value = slot.offsetY;
+    $('prop-flip-x').checked = slot.flipX;
+    $('prop-flip-y').checked = slot.flipY;
+  }
+
+  function render() {
+    const layout = computePaperPreviewLayout(paper, resolveZoom('fit-page', {
+      containerWidthPx: viewport.clientWidth - 64,
+      containerHeightPx: viewport.clientHeight - 64,
+      paperWidthPt: computePaperPreviewLayout(paper, 1).paperPt.width,
+      paperHeightPt: computePaperPreviewLayout(paper, 1).paperPt.height,
+    }));
+    lastLayout = layout;
+    const paperEl = renderPaper(viewport, layout);
+    const contentEl = paperEl.querySelector(':scope > .pl-content-area');
+    const slots = currentSlots();
+    renderSlots(contentEl, slots, layout.contentAreaPx.width, layout.contentAreaPx.height);
+
+    for (const el of contentEl.querySelectorAll(':scope > .pl-slot')) {
+      const id = el.dataset.slotId;
+      const slot = slots.find((s) => s.id === id);
+      el.classList.toggle('selected', id === selection);
+      const px = computeSlotPx(slot, layout.contentAreaPx.width, layout.contentAreaPx.height);
+      renderSlotContent(el, slot, resolveContent(slot.sourceId), px.width, px.height);
+    }
+
+    renderProps();
+
+    $('readout').textContent = JSON.stringify({
+      selection,
+      slots: slots.map(({ id, sourceId, fitMode, scale, rotation, offsetX, offsetY, flipX, flipY }) =>
+        ({ id, sourceId, fitMode, scale, rotation, offsetX: +offsetX.toFixed(3), offsetY: +offsetY.toFixed(3), flipX, flipY })),
+    }, null, 2);
+
+    window.__slots = slots;
+    window.__selection = selection;
+    window.__layout = layout;
+  }
+
+  function setSelection(slotId) {
+    selection = slotId;
+    store.commit(setSelectionAction(slotId ? [slotId] : []), null, { historyEntry: false });
+    render();
+  }
+
+  // --- Gallery: upload + drag source --------------------------------------
+
+  function renderTile(source) {
+    const tile = document.createElement('div');
+    tile.className = 'tile';
+    tile.draggable = true;
+    tile.dataset.sourceId = source.id;
+    tile.innerHTML = `
+      <div class="placeholder">載入中…</div>
+      <img style="display:none">
+      <div>${source.kind}${source.kind === 'pdf-page' ? ` p${source.pageIndex + 1}` : ''}</div>
+      <div>${source.fileName ?? ''}</div>
+    `;
+    tile.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', source.id);
+      e.dataTransfer.effectAllowed = 'copy';
+      tile.classList.add('dragging');
+    });
+    tile.addEventListener('dragend', () => tile.classList.remove('dragging'));
+    gallery.appendChild(tile);
+  }
+
+  async function handleFiles(fileList) {
+    for (const file of fileList) {
+      try {
+        if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+          const newSources = await engine.loadPdfFile(file, { pdfjsLib, pageRange: 'all' });
+          for (const s of newSources) { sources.set(s.id, s); renderTile(s); }
+          log(`載入 PDF ${file.name}：${newSources.length} 頁`, true);
+        } else {
+          const s = await engine.loadImageFile(file);
+          sources.set(s.id, s);
+          renderTile(s);
+          log(`載入圖片 ${file.name}`, true);
+        }
+      } catch (err) {
+        log(`載入失敗 ${file.name}: ${err.message}`, false);
+        console.error(err);
+      }
+    }
+  }
+
+  $('file-input').addEventListener('change', (e) => {
+    if (e.target.files.length) handleFiles(e.target.files);
+  });
+
+  // --- Drop a gallery Source onto a Slot (§10.1) --------------------------
+
+  async function placeSourceOnSlot(sourceId, slotId) {
+    const source = sources.get(sourceId);
+    if (!source) return;
+    store.commit(setSlotSourceAction(PAGE_ID, slotId, sourceId), null);
+    setSelection(slotId);
+    try {
+      await engine.ensurePreview(source);
+      render(); // preview finished rendering — swap the thumbnail for it
+    } catch (err) {
+      log(`Preview 渲染失敗 ${sourceId}: ${err.message}`, false);
+    }
+  }
+
+  viewport.addEventListener('dragover', (e) => {
+    const slotEl = e.target.closest('.pl-slot');
+    for (const el of viewport.querySelectorAll('.pl-slot.drop-target')) el.classList.remove('drop-target');
+    if (slotEl) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      slotEl.classList.add('drop-target');
+    }
+  });
+
+  viewport.addEventListener('drop', (e) => {
+    const slotEl = e.target.closest('.pl-slot');
+    if (!slotEl) return;
+    e.preventDefault();
+    slotEl.classList.remove('drop-target');
+    const sourceId = e.dataTransfer.getData('text/plain');
+    if (sourceId) placeSourceOnSlot(sourceId, slotEl.dataset.slotId);
+  });
+
+  viewport.addEventListener('click', (e) => {
+    const slotEl = e.target.closest('.pl-slot');
+    setSelection(slotEl ? slotEl.dataset.slotId : null);
+  });
+
+  // --- Properties panel ----------------------------------------------------
+
+  $('prop-fit').addEventListener('change', (e) => {
+    if (!selection) return;
+    store.commit(setSlotFitModeAction(PAGE_ID, selection, e.target.value), null);
+    render();
+  });
+  $('prop-scale').addEventListener('change', (e) => {
+    if (!selection) return;
+    const value = parseFloat(e.target.value);
+    if (!(value > 0)) return;
+    store.commit(setSlotScaleAction(PAGE_ID, selection, value), null);
+    render();
+  });
+  $('prop-rotate').addEventListener('click', () => {
+    if (!selection) return;
+    store.commit(rotateSlotContentAction(PAGE_ID, selection, 90), null);
+    render();
+  });
+  $('prop-offset-x').addEventListener('input', (e) => {
+    if (!selection) return;
+    const slot = selectedSlot();
+    store.commit(setSlotOffsetAction(PAGE_ID, selection, parseFloat(e.target.value), slot.offsetY), null, { coalesceKey: `offset:${selection}` });
+    render();
+  });
+  $('prop-offset-x').addEventListener('change', () => store.endCoalescing());
+  $('prop-offset-y').addEventListener('input', (e) => {
+    if (!selection) return;
+    const slot = selectedSlot();
+    store.commit(setSlotOffsetAction(PAGE_ID, selection, slot.offsetX, parseFloat(e.target.value)), null, { coalesceKey: `offset:${selection}` });
+    render();
+  });
+  $('prop-offset-y').addEventListener('change', () => store.endCoalescing());
+  $('prop-flip-x').addEventListener('change', (e) => {
+    if (!selection) return;
+    const slot = selectedSlot();
+    store.commit(setSlotFlipAction(PAGE_ID, selection, e.target.checked, slot.flipY), null);
+    render();
+  });
+  $('prop-flip-y').addEventListener('change', (e) => {
+    if (!selection) return;
+    const slot = selectedSlot();
+    store.commit(setSlotFlipAction(PAGE_ID, selection, slot.flipX, e.target.checked), null);
+    render();
+  });
+  $('prop-clear').addEventListener('click', () => {
+    if (!selection) return;
+    store.commit(clearSlotContentAction(PAGE_ID, selection), null);
+    render();
+  });
+
+  $('reset-4up').addEventListener('click', () => {
+    store.commit((state) => {
+      const pages = state.pages.map((p) => (p.id === PAGE_ID ? { ...p, slots: presetSlots('4up') } : p));
+      return { ...state, pages };
+    }, null);
+    setSelection(null);
+  });
+  $('btn-undo').addEventListener('click', () => { store.undo(); render(); });
+  $('btn-redo').addEventListener('click', () => { store.redo(); render(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); store.undo(); render(); }
+    else if (e.ctrlKey && e.key.toLowerCase() === 'y') { e.preventDefault(); store.redo(); render(); }
+  });
+
+  window.addEventListener('resize', render);
+  log('就緒，請選擇 PDF 或圖片檔案，然後拖曳縮圖到 Slot 上');
+  render();
+
+  // Test-only hooks for scripted (Playwright) verification.
+  window.__store = store;
+  window.__engine = engine;
+  window.__sources = sources;
+  window.__handleFiles = handleFiles;
+  window.__waitForAllThumbnails = () => engine.waitForAllThumbnails();
+  window.__placeSourceOnSlot = placeSourceOnSlot;
+  window.__setSelection = setSelection;
+</script>
+</body>
+</html>

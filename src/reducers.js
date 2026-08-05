@@ -22,6 +22,16 @@ import {
   splitSlotVertical,
   mergeSlots,
 } from './free-layout.js';
+import {
+  setSlotSource,
+  setSlotFitMode,
+  setSlotScale,
+  setSlotRotation,
+  rotateSlotContent,
+  setSlotOffset,
+  setSlotFlip,
+  clearSlotContent,
+} from './slot-content.js';
 
 function updatePageSlots(state, pageId, updateFn) {
   const pageIndex = state.pages.findIndex((p) => p.id === pageId);
@@ -69,4 +79,42 @@ export function mergeSlotsAction(pageId, slotIds) {
 // `{ historyEntry: false }` to store.commit() alongside this action.
 export function setSelectionAction(selection) {
   return (state) => ({ ...state, selection });
+}
+
+// --- Source Placement (§10.1/§10.2, Phase 5) -----------------------------
+// Same wiring pattern as the Free Layout actions above: each creator targets
+// one page's `slots` array via a slot-content.js pure primitive. Coalescing
+// is again the caller's job — e.g. an Offset X/Y slider drag should pass a
+// `coalesceKey` the same way a Free Layout drag does (§7.2).
+
+export function setSlotSourceAction(pageId, slotId, sourceId) {
+  return (state) => updatePageSlots(state, pageId, (slots) => setSlotSource(slots, slotId, sourceId));
+}
+
+export function setSlotFitModeAction(pageId, slotId, fitMode) {
+  return (state) => updatePageSlots(state, pageId, (slots) => setSlotFitMode(slots, slotId, fitMode));
+}
+
+export function setSlotScaleAction(pageId, slotId, scale) {
+  return (state) => updatePageSlots(state, pageId, (slots) => setSlotScale(slots, slotId, scale));
+}
+
+export function setSlotRotationAction(pageId, slotId, rotation) {
+  return (state) => updatePageSlots(state, pageId, (slots) => setSlotRotation(slots, slotId, rotation));
+}
+
+export function rotateSlotContentAction(pageId, slotId, deltaDeg) {
+  return (state) => updatePageSlots(state, pageId, (slots) => rotateSlotContent(slots, slotId, deltaDeg));
+}
+
+export function setSlotOffsetAction(pageId, slotId, offsetX, offsetY) {
+  return (state) => updatePageSlots(state, pageId, (slots) => setSlotOffset(slots, slotId, offsetX, offsetY));
+}
+
+export function setSlotFlipAction(pageId, slotId, flipX, flipY) {
+  return (state) => updatePageSlots(state, pageId, (slots) => setSlotFlip(slots, slotId, flipX, flipY));
+}
+
+export function clearSlotContentAction(pageId, slotId) {
+  return (state) => updatePageSlots(state, pageId, (slots) => clearSlotContent(slots, slotId));
 }
