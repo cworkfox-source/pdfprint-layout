@@ -13,3 +13,8 @@ Thumbs.db
 /AGENTS.md
 /CLAUDE.md
 /.antigravity_rules.md
+
+# Local test fixtures — real-world files used for manual testing only,
+# never published (e.g. docs/test.pdf, a real unrelated document used to
+# exercise Phase 2 PDF parsing; user request 2026-08-05)
+docs/test.pdf
