@@ -3,13 +3,13 @@
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
 Visual Page Imposition Designer,public repo
 https://github.com/cworkfox-source/pdfprint-layout。**Phase 0、Phase 1、
-Phase 2 已完成**(geometry/store/model + paper/margin/zoom/print-CSS +
-PDF/圖片 Source Engine,89 個單元測試 + 瀏覽器實測皆通過)。下一步:
-Phase 3 Layout Engine(1/2/4/6/9-up、自訂 Grid、上2下1 等 preset 版型)。
-無 blocker(開發用 pdf.js 版本 pin 改為 v5.4.149,見 decision_log D-009)。
+Phase 2、Phase 3 已完成**(geometry/store/model + paper/margin/zoom/
+print-CSS + PDF/圖片 Source Engine + Layout Engine preset/自訂 Grid,
+112 個單元測試 + 瀏覽器實測皆通過)。下一步:Phase 4 Free Layout Designer
+(新增/移動/縮放/分割/合併 Slot、Snap、Z-order)。無 blocker。
 
 ## Current Version
-Plan v2.1(§5.2 補 docId 欄位)/ Phase 2 完成(無產品 UI,僅引擎與 dev 檢查頁)
+Plan v2.1(§5.2 補 docId 欄位)/ Phase 3 完成(無產品 UI,僅引擎與 dev 檢查頁)
 
 ## Project Goals
 純前端、零後端、可離線、可打包為單一 HTML 的視覺化拼版工具。使用者載入 PDF 或
@@ -81,14 +81,42 @@ Plan v2.1(§5.2 補 docId 欄位)/ Phase 2 完成(無產品 UI,僅引擎與 dev 
     docId 參照計數行為、Delete All 記憶體歸零、頁碼範圍 UI 串接)全數
     通過,細節見 change_log 2026-08-05 19:30。
 
+- Phase 3 Layout Engine(2026-08-05):
+  - `src/layout.js` — 純幾何、無 DOM:`splitAxis()` 是唯一的軸切割原語
+    (扣除 gap 後依權重比例分配,回傳已正規化 0..1 的 segment);
+    `generateGridSlots()` 同時服務 §9.1 均勻 grid(1/2/4/6/9/16-up)與
+    §9.2 自訂 Grid(同一函式,只是 rows/cols 由使用者輸入);
+    `generateTopBottomSplit()`/`generateLeftRightSplit()` 服務上2下1、
+    上1下2、左1右2、左2右1,以及 [S] 的上3下1/上1下3(即 plan §9.1 的
+    「3+1」「1+3」);`GRID_PRESETS`/`generatePresetSlots()` 是完整的
+    preset registry。`createSlotsFromRects()` 橋接到 `model.js` 的
+    `createSlot()`。plan §9.1 另列的「2+2」preset 因規格未定義其與
+    2×2(=4up)的幾何差異,本階段刻意不實作,已記錄為未解決假設(見
+    decision_log D-010)。
+  - `src/preview.js` — 新增 `computeSlotPx()`(純函式)與
+    `renderSlots()`(DOM adapter),沿用同一套「純計算/DOM 寫入分離」
+    原則;繪製順序呼叫 `geometry.js` 既有的 `sortByZOrder()`(§6.5),
+    這是該函式第一次被實際的 renderer 使用。
+  - `dev/layout.html` — Phase 3 dev harness:preset 下拉選單、自訂
+    Rows/Cols、Gap H/V 控制,即時把產生的 Slots 畫到 Phase 1 的紙張
+    Canvas 上。
+  - 23 個新單元測試(共 112 個,含 preview.js 新增 2 個)+ 瀏覽器實測
+    (Playwright:14 個 preset 逐一套用,每個 Slot 的實際
+    `getBoundingClientRect()` 與 model 算出的 normalized 值換算後比對,
+    0 個像素誤差;自訂 3×5 Grid 正確產生 15 個 Slot;調整 Gap 後重新
+    套用 4-up,數值符合手算公式)全數通過,細節見 change_log
+    2026-08-05 20:15。
+
 ## Features In Development
-Phase 3(Layout Engine)尚未開始:1/2/4/6/9/16-up、自訂 Grid、上2下1、
-上1下2、左1右2 等 preset 版型。
+Phase 4(Free Layout Designer)尚未開始:新增/移動/縮放/分割/合併/刪除/
+複製 Slot、對齊、Snap、Z-order 操作。
 
 ## Planned Features
-見 `docs/plan.md` §22 開發階段。Phase 3 → Phase 11。
+見 `docs/plan.md` §22 開發階段。Phase 4 → Phase 11。
 
 ## Known Issues
+- plan.md §9.1 的「2+2」preset 未定義其與 2×2 grid(=4up)的幾何差異,
+  Phase 3 刻意未實作,見 decision_log D-010。
 - 開發/測試環境(Playwright 內建 Chromium 141)無法 render pdf.js
   v6.2.108(呼叫尚未普及的 `Map.prototype.getOrInsertComputed`,拋
   `TypeError`)。已改用 `scripts/fetch-vendor.sh` pin 的 v5.4.149 供 Phase

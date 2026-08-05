@@ -7,6 +7,7 @@
 // lossless).
 
 import { resolvePaperSizePt } from './model.js';
+import { sortByZOrder } from './geometry.js';
 
 // Preview-only convention: at zoom 1.0, 1pt = 1 CSS px. This is purely a
 // Preview Renderer choice — Export (pdf-lib) never sees pixels, only pt
@@ -115,6 +116,47 @@ export function renderPaper(container, layout) {
   contentEl.style.outline = '1px dashed rgba(0,100,255,0.6)';
 
   return paperEl;
+}
+
+// §13.1 — a Slot's Normalized rect (§5.3, 0..1 relative to the content
+// area) converted to content-area-relative preview px. Pure so it's
+// unit-testable without a DOM; Export will one day need the pt equivalent
+// of this same idea, but that's a separate function per §4.3 (this one is
+// Preview-only, px, and never consulted by Export).
+export function computeSlotPx(slot, contentAreaWidthPx, contentAreaHeightPx) {
+  return {
+    x: slot.x * contentAreaWidthPx,
+    y: slot.y * contentAreaHeightPx,
+    width: slot.w * contentAreaWidthPx,
+    height: slot.h * contentAreaHeightPx,
+  };
+}
+
+// DOM adapter: draws one outlined box per Slot inside the content-area
+// element renderPaper() created. Rebuilds the `.pl-slot` children from
+// scratch on every call rather than diffing — Phase 3/4 change the slot
+// list wholesale often enough (new preset, split/merge) that reuse isn't
+// worth the bookkeeping yet. Draw order follows §6.5's shared
+// sortByZOrder() — the same function Export will use — not array order.
+export function renderSlots(contentEl, slots, contentAreaWidthPx, contentAreaHeightPx) {
+  for (const el of contentEl.querySelectorAll(':scope > .pl-slot')) el.remove();
+
+  for (const slot of sortByZOrder(slots)) {
+    const { x, y, width, height } = computeSlotPx(slot, contentAreaWidthPx, contentAreaHeightPx);
+    const el = document.createElement('div');
+    el.className = 'pl-slot';
+    el.dataset.slotId = slot.id;
+    el.style.position = 'absolute';
+    el.style.boxSizing = 'border-box';
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    el.style.width = `${width}px`;
+    el.style.height = `${height}px`;
+    el.style.outline = '1px solid rgba(200,0,0,0.85)';
+    el.style.background = 'rgba(200,0,0,0.05)';
+    contentEl.appendChild(el);
+  }
+  return contentEl;
 }
 
 // §35/§36 — the ONE place `@page size` is set, so the browser's native

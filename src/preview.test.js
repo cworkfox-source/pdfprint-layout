@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createPaperSettings } from './model.js';
+import { createPaperSettings, createSlot } from './model.js';
 import {
   resolveZoom,
   computeContentAreaPt,
   computePaperPreviewLayout,
+  computeSlotPx,
   PX_PER_PT_AT_ZOOM_1,
 } from './preview.js';
 
@@ -112,4 +113,16 @@ test('computePaperPreviewLayout: A3 exact pt values', () => {
   const layout = computePaperPreviewLayout(paper, 1);
   assertClose(layout.paperPt.width, 841.89, 0.01);
   assertClose(layout.paperPt.height, 1190.551, 0.01);
+});
+
+test('computeSlotPx converts a Normalized Slot rect to content-area-relative px', () => {
+  const slot = createSlot({ x: 0.25, y: 0.5, w: 0.5, h: 0.25 });
+  const px = computeSlotPx(slot, 400, 800);
+  assert.deepEqual(px, { x: 100, y: 400, width: 200, height: 200 });
+});
+
+test('computeSlotPx: a full-bleed slot (0,0,1,1) exactly fills the content area', () => {
+  const slot = createSlot({ x: 0, y: 0, w: 1, h: 1 });
+  const px = computeSlotPx(slot, 300, 500);
+  assert.deepEqual(px, { x: 0, y: 0, width: 300, height: 500 });
 });

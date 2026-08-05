@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>Phase 3 dev harness — Layout Engine</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 1rem; color: #222; }
+  h1 { font-size: 1.1rem; }
+  .controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end; margin-bottom: 1rem; }
+  .controls label { display: flex; flex-direction: column; font-size: 12px; gap: 2px; }
+  .controls fieldset { border: 1px solid #ccc; display: flex; gap: 0.75rem; align-items: flex-end; }
+  #viewport { border: 1px solid #ccc; overflow: auto; height: 65vh; padding: 2rem; background: #eee; }
+  #readout { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre; margin-top: 0.5rem; max-height: 200px; overflow: auto; }
+  .pl-paper { margin: 0 auto; }
+  .pl-slot { font: 10px ui-monospace, monospace; color: #900; }
+</style>
+</head>
+<body>
+<h1>Phase 3 dev harness — 不是產品 UI，僅供人工／自動化檢查 Layout Engine（見 docs/plan.md Phase 3）</h1>
+
+<div class="controls">
+  <label>Paper
+    <select id="paper-size">
+      <option>A4</option>
+      <option>A3</option>
+      <option>Letter</option>
+      <option>Legal</option>
+    </select>
+  </label>
+  <label>Orientation
+    <select id="orientation">
+      <option value="portrait">Portrait</option>
+      <option value="landscape">Landscape</option>
+    </select>
+  </label>
+  <label>Margin (pt, all sides)
+    <input id="margin" type="number" value="28" min="0">
+  </label>
+  <label>Gap H (pt)
+    <input id="gap-h" type="number" value="10" min="0">
+  </label>
+  <label>Gap V (pt)
+    <input id="gap-v" type="number" value="10" min="0">
+  </label>
+
+  <fieldset>
+    <legend>Preset</legend>
+    <label>Preset
+      <select id="preset"></select>
+    </label>
+    <button id="apply-preset">Apply Preset</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>§9.2 Custom Grid</legend>
+    <label>Rows
+      <input id="custom-rows" type="number" value="3" min="1">
+    </label>
+    <label>Cols
+      <input id="custom-cols" type="number" value="5" min="1">
+    </label>
+    <button id="apply-custom">Apply Custom Grid</button>
+  </fieldset>
+</div>
+
+<div id="viewport"></div>
+<div id="readout"></div>
+
+<script type="module">
+  import { createPaperSettings } from '/src/model.js';
+  import { computePaperPreviewLayout, resolveZoom, renderPaper, renderSlots } from '/src/preview.js';
+  import { generatePresetSlots, generateGridSlots, createSlotsFromRects, listPresetIds } from '/src/layout.js';
+
+  const $ = (id) => document.getElementById(id);
+  const viewport = $('viewport');
+  const presetSelect = $('preset');
+
+  for (const id of listPresetIds()) {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = id;
+    presetSelect.appendChild(opt);
+  }
+  presetSelect.value = '4up';
+
+  let currentSlots = [];
+
+  function currentPaper() {
+    return createPaperSettings({
+      size: $('paper-size').value,
+      orientation: $('orientation').value,
+      marginTopPt: Number($('margin').value),
+      marginBottomPt: Number($('margin').value),
+      marginLeftPt: Number($('margin').value),
+      marginRightPt: Number($('margin').value),
+    });
+  }
+
+  function gaps() {
+    return { gapHorizontalPt: Number($('gap-h').value), gapVerticalPt: Number($('gap-v').value) };
+  }
+
+  function render() {
+    const paper = currentPaper();
+    const unzoomed = computePaperPreviewLayout(paper, 1);
+    const zoom = resolveZoom('fit-page', {
+      containerWidthPx: viewport.clientWidth - 64,
+      containerHeightPx: viewport.clientHeight - 64,
+      paperWidthPt: unzoomed.paperPt.width,
+      paperHeightPt: unzoomed.paperPt.height,
+    });
+    const layout = computePaperPreviewLayout(paper, zoom);
+    const paperEl = renderPaper(viewport, layout);
+    const contentEl = paperEl.querySelector(':scope > .pl-content-area');
+    renderSlots(contentEl, currentSlots, layout.contentAreaPx.width, layout.contentAreaPx.height);
+
+    // labels for visual/automated identification
+    contentEl.querySelectorAll(':scope > .pl-slot').forEach((el, i) => {
+      el.textContent = String(i);
+    });
+
+    $('readout').textContent = JSON.stringify({ presetOrGrid: window.__lastAction, slotCount: currentSlots.length, slots: currentSlots }, null, 2);
+    window.__lastLayout = layout;
+    window.__lastSlots = currentSlots;
+  }
+
+  function applyPreset() {
+    const paper = currentPaper();
+    const layout = computePaperPreviewLayout(paper, 1);
+    const rects = generatePresetSlots(presetSelect.value, { contentAreaWidthPt: layout.contentAreaPt.width, contentAreaHeightPt: layout.contentAreaPt.height, ...gaps() });
+    currentSlots = createSlotsFromRects(rects);
+    window.__lastAction = `preset:${presetSelect.value}`;
+    render();
+  }
+
+  function applyCustomGrid() {
+    const paper = currentPaper();
+    const layout = computePaperPreviewLayout(paper, 1);
+    const rects = generateGridSlots({
+      contentAreaWidthPt: layout.contentAreaPt.width,
+      contentAreaHeightPt: layout.contentAreaPt.height,
+      rows: Number($('custom-rows').value),
+      cols: Number($('custom-cols').value),
+      ...gaps(),
+    });
+    currentSlots = createSlotsFromRects(rects);
+    window.__lastAction = `custom:${$('custom-rows').value}x${$('custom-cols').value}`;
+    render();
+  }
+
+  $('apply-preset').addEventListener('click', applyPreset);
+  $('apply-custom').addEventListener('click', applyCustomGrid);
+  for (const id of ['paper-size', 'orientation', 'margin']) {
+    $(id).addEventListener('change', render);
+  }
+  window.addEventListener('resize', render);
+
+  window.__applyPreset = applyPreset;
+  window.__applyCustomGrid = applyCustomGrid;
+  window.__render = render;
+
+  applyPreset();
+</script>
+</body>
+</html>
