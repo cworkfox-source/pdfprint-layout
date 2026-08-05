@@ -21,6 +21,11 @@ import {
   splitSlotHorizontal,
   splitSlotVertical,
   mergeSlots,
+  setSlotLocked,
+  bringSlotForward,
+  sendSlotBackward,
+  bringSlotToFront,
+  sendSlotToBack,
 } from './free-layout.js';
 import {
   setSlotSource,
@@ -73,6 +78,31 @@ export function splitSlotVerticalAction(pageId, slotId, ratio) {
 
 export function mergeSlotsAction(pageId, slotIds) {
   return (state) => updatePageSlots(state, pageId, (slots) => mergeSlots(slots, slotIds));
+}
+
+// §10.3 — lock/unlock toggle (gap found during a Phase 5 completeness audit;
+// see decision_log D-013 — the flag existed and was enforced since Phase 4,
+// but nothing could actually set it until now).
+export function setSlotLockedAction(pageId, slotId, locked) {
+  return (state) => updatePageSlots(state, pageId, (slots) => setSlotLocked(slots, slotId, locked));
+}
+
+// §6.5 — Z-order (same gap/D-013: Preview/Export already share sortByZOrder()
+// since Phase 0, but there was no way to actually change a Slot's z).
+export function bringSlotForwardAction(pageId, slotId) {
+  return (state) => updatePageSlots(state, pageId, (slots) => bringSlotForward(slots, slotId));
+}
+
+export function sendSlotBackwardAction(pageId, slotId) {
+  return (state) => updatePageSlots(state, pageId, (slots) => sendSlotBackward(slots, slotId));
+}
+
+export function bringSlotToFrontAction(pageId, slotId) {
+  return (state) => updatePageSlots(state, pageId, (slots) => bringSlotToFront(slots, slotId));
+}
+
+export function sendSlotToBackAction(pageId, slotId) {
+  return (state) => updatePageSlots(state, pageId, (slots) => sendSlotToBack(slots, slotId));
 }
 
 // §7.3 — selection never enters History; callers MUST pass

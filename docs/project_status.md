@@ -4,15 +4,16 @@
 Visual Page Imposition Designer,public repo
 https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-5 已完成**
 (geometry/store/model + paper/margin/zoom/print-CSS + PDF/圖片 Source
-Engine + Layout Engine preset/自訂 Grid + Free Layout Designer + Source
-Placement 含 Fit/Cover/Stretch/Rotation/Scale/Offset/Flip/Clip 與 §12.7
-中解析度 Canvas Preview,191 個單元測試 + 瀏覽器實測皆通過)。下一步:
-Phase 6 Auto Imposition(Auto Fill、Page Generation、Repeat、Odd/Even)。
-無 blocker。
+Engine + Layout Engine preset/自訂 Grid + Free Layout Designer(含補完的
+鎖定/解鎖切換與 Z-order 操作)+ Source Placement 含 Fit/Cover/Stretch/
+Rotation/Scale/Offset/Flip/Clip 與 §12.7 中解析度 Canvas Preview,204 個
+單元測試 + 瀏覽器實測皆通過)。下一步:Phase 6 Auto Imposition(Auto
+Fill、Page Generation、Repeat、Odd/Even)。無 blocker。
 
 ## Current Version
 Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 5 完成
-(無產品 UI,僅引擎與 dev 檢查頁)
+(含 Phase 4 遺留的鎖定/解鎖、Z-order [M] 缺口補完,見 D-013;無產品 UI,
+僅引擎與 dev 檢查頁)
 
 ## Project Goals
 純前端、零後端、可離線、可打包為單一 HTML 的視覺化拼版工具。使用者載入 PDF 或
@@ -188,6 +189,23 @@ Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 5 �
     undo 且一次 Undo 完整還原、Flip 鏡射、清除內容移除 DOM 節點並重置
     欄位、PDF 頁面與圖片兩種 Source 皆正確產生 §12.7 中解析度 Preview 且
     非同步就緒後自動換上)全數通過,細節見 decision_log D-012。
+
+- Phase 4 遺留缺口補完(2026-08-05,Phase 5 完成後的完整性檢查發現):
+  §10.3「鎖定／解鎖」與 §6.5「Z-order 操作」兩個 **[M]** 項目,plan.md
+  §22 都列在 Phase 4 範圍內,但當時的實作只做了鎖定的**強制執行**與
+  z 的**排序讀取**,從未提供任何方式能實際「切換鎖定」或「改變 z」——
+  兩者形同虛設。已補上:
+  - `src/free-layout.js` 新增 `setSlotLocked()`(雙向切換,不加限制)與
+    `bringSlotForward()`/`sendSlotBackward()`/`bringSlotToFront()`/
+    `sendSlotToBack()`(單一 Slot,重新映射為乾淨的 `0..n-1` z 值,對
+    鎖定的 Slot 一律允許)。
+  - `src/reducers.js` 新增對應 5 個 action creator。
+  - `dev/free-layout.html` 新增 Lock/Unlock 與四個 Z-order 按鈕。
+  - 13 個新單元測試(共 204 個)+ 瀏覽器實測(Z-order 四種操作逐一驗證
+    排序位置;Lock 切換後以真實滑鼠拖曳確認強制執行仍正確生效、Unlock
+    後恢復可動;鎖定/解鎖進入 Undo history 且可復原)全數通過。
+  - 判斷點(單一 Slot 而非多選、z 語意為排序位置而非原始數值、鎖定不擋
+    Z-order)見 decision_log D-013。
 
 ## Features In Development
 Phase 6(Auto Imposition)尚未開始:Auto Fill、Page Generation、Repeat、

@@ -11,6 +11,11 @@ import {
   splitSlotHorizontalAction,
   splitSlotVerticalAction,
   mergeSlotsAction,
+  setSlotLockedAction,
+  bringSlotForwardAction,
+  sendSlotBackwardAction,
+  bringSlotToFrontAction,
+  sendSlotToBackAction,
   setSelectionAction,
   setSlotSourceAction,
   setSlotFitModeAction,
@@ -150,6 +155,40 @@ test('full split -> merge -> undo x2 round-trip restores the original single slo
 test('an unknown pageId throws instead of silently doing nothing', () => {
   const store = createStore(makeTwoPageState());
   assert.throws(() => store.commit(moveSlotsAction('does-not-exist', ['a1'], 0.1, 0), null), /No page with id/);
+});
+
+// --- Lock/Unlock + Z-order actions (§10.3/§6.5, gap-fill — see D-013) ------
+
+test('setSlotLockedAction toggles the flag on the correct page/slot only', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(setSlotLockedAction('page-a', 'a1', true), null);
+  const [pageA, pageB] = store.getState().pages;
+  assert.equal(pageA.slots[0].locked, true);
+  assert.equal(pageB.slots[0].locked, false); // untouched
+});
+
+test('Z-order actions (bringSlotForward/sendSlotBackward/bringSlotToFront/sendSlotToBack) target the correct page', () => {
+  const top = createSlot({ id: 't', z: 0 });
+  const mid = createSlot({ id: 'm', z: 1 });
+  const bottom = createSlot({ id: 'b', z: 2 });
+  const page = createPage({ id: 'p1', slots: [top, mid, bottom] });
+  const store = createStore(createAppState({ pages: [page] }));
+
+  store.commit(bringSlotToFrontAction('p1', 't'), null);
+  let slots = store.getState().pages[0].slots;
+  assert.deepEqual([...slots].sort((a, b) => a.z - b.z).map((s) => s.id), ['m', 'b', 't']);
+
+  store.commit(sendSlotToBackAction('p1', 't'), null);
+  slots = store.getState().pages[0].slots;
+  assert.deepEqual([...slots].sort((a, b) => a.z - b.z).map((s) => s.id), ['t', 'm', 'b']);
+
+  store.commit(bringSlotForwardAction('p1', 't'), null);
+  slots = store.getState().pages[0].slots;
+  assert.deepEqual([...slots].sort((a, b) => a.z - b.z).map((s) => s.id), ['m', 't', 'b']);
+
+  store.commit(sendSlotBackwardAction('p1', 't'), null);
+  slots = store.getState().pages[0].slots;
+  assert.deepEqual([...slots].sort((a, b) => a.z - b.z).map((s) => s.id), ['t', 'm', 'b']);
 });
 
 // --- Source Placement actions (§10.1/§10.2, Phase 5) ------------------------

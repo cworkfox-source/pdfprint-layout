@@ -182,3 +182,69 @@ Boundaries 方式明確給予、repo 現在就以 public 建立。
 PASS(文件審查;§23.8 為程式碼進場後才可實際執行的驗收項目,目前僅完成規格
 定義)
 
+
+## 2026-08-05 16:20
+
+### Type
+Docs
+
+### Summary
+建立本機 git 倉庫與遠端 GitHub public repo,推送目前的文件內容作為版本控制
+起點。
+
+### Files Changed
+- .gitignore(新增)、README.md(新增)
+- 首次 commit 涵蓋:AGENTS.md、CLAUDE.md、.antigravity_rules.md、docs/*、
+  README.md、.gitignore(不含程式碼,因尚未開始 Phase −1)
+
+### Reason
+使用者於 AskUserQuestion 選擇「現在就建 repo」「Public」,作為後續每次修改
+直接 push 的版本控制起點,而非等 Phase 11 build 完成才一次性建立。
+
+### Implementation Details
+`git init` → `git add` 指定檔案(非 `-a`,避免誤入未預期檔案)→ 初次 commit →
+`gh repo create cworkfox-source/pdfprint-layout --public --source=. --push`。
+執行細節與實際結果見下方 Verification Result。
+
+### Impact Analysis
+專案原始碼與文件自此有遠端備份;repo 目前公開但只含文件,不含任何使用者資料
+或機敏內容(已依 Boundaries「不得印出/寫入金鑰密碼個資」檢查)。
+
+### Verification Result
+PASS — repo 建立於 https://github.com/cworkfox-source/pdfprint-layout
+(public),root commit `8fbf7bb0`。commit 作者身分原被自動猜成
+`unknown <BASS000025@tccg.gov.tw>`(政府網域,不宜公開),經使用者確認後改為
+GitHub noreply 位址 `256346730+cworkfox-source@users.noreply.github.com`
+再 push,未推送任何含真實 email 的歷史。
+
+## 2026-08-05 16:35
+
+### Type
+Docs
+
+### Summary
+依使用者指示,`AGENTS.md`、`CLAUDE.md`、`.antigravity_rules.md` 三個 AI
+agent 治理規則檔改為只留本機,不再發布到 public GitHub repo。
+
+### Files Changed
+- .gitignore — 新增三行,忽略上述三個檔案
+- AGENTS.md、CLAUDE.md、.antigravity_rules.md — `git rm --cached`(僅取消
+  git 追蹤,本機檔案未刪除,仍正常生效)
+
+### Reason
+使用者要求這三個檔案「都不用上去(GitHub)」。已詢問是「只不上傳、本機保留」
+還是「本機也刪除」,使用者選擇前者——保留本機治理機制運作,只是不公開發布。
+
+### Implementation Details
+`git rm --cached` 三檔 → 加入 `.gitignore` → commit → push。舊 commit
+(`8fbf7bb0`、`7afb294`)歷史中仍含這三個檔案,因 AGENTS.md Hard Rules 禁止
+改寫歷史;只有目前與往後的檔案樹不再包含它們。
+
+### Impact Analysis
+公開 repo 現在只看得到產品文件(`docs/`、`README.md`),AI 治理規則對外不可見。
+本機端 AGENTS.md/CLAUDE.md 治理流程不受影響,之後每個 session 仍會照常運作。
+
+### Verification Result
+PASS — `git log -1` 確認已 push(`801ae4b`);本機 `ls` 確認三檔仍存在於
+工作目錄。
+

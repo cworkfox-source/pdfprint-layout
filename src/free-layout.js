@@ -12,6 +12,7 @@
 // that deserve a hard stop rather than a silent no-op.
 
 import { createSlot } from './model.js';
+import { sortByZOrder } from './geometry.js';
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -172,6 +173,89 @@ export function mergeSlots(slots, slotIds) {
     }
   }
   return result;
+}
+
+// --- Lock / Unlock (§10.3) -------------------------------------------------
+// Toggling the flag itself is unrestricted — you must be able to lock a
+// Slot and later unlock it, or locking would be a one-way trap. The
+// restrictions THIS flag triggers already exist above (moveSlots' silent
+// skip; setSlotRect/deleteSlots/splitSlot*/mergeSlots's throw).
+
+export function setSlotLocked(slots, slotId, locked) {
+  const index = slots.findIndex((s) => s.id === slotId);
+  if (index === -1) throw new Error(`setSlotLocked: no slot with id ${slotId}`);
+  const next = [...slots];
+  next[index] = { ...next[index], locked };
+  return next;
+}
+
+// --- Z-order (§6.5) ---------------------------------------------------------
+// "Layer" means POSITION IN THE §6.5 DRAW ORDER (sortByZOrder: z ascending,
+// array-index tiebreak) — not the raw `z` number, which duplicateSlots()/
+// mergeSlots() already mint above/below the existing range rather than
+// keeping contiguous. Every op below re-derives a full 0..n-1 ranking from
+// the reordered id list, so the result is never sensitive to whatever the
+// previous z numbers happened to be, and ties are gone afterward too.
+//
+// Single Slot only (not a multi-select batch) — plan.md's wording ("上移一
+// 層／下移一層／移到最上／移到最下") reads as a per-object action the way
+// every mainstream design tool (PowerPoint/Illustrator/Figma) treats it;
+// "reorder a whole multi-selection while preserving its internal order" is
+// a distinct, fussier operation plan.md never actually asks for.
+//
+// Locked Slots are NOT blocked here — §10.3 only names Move/Resize/Delete;
+// changing draw order doesn't move/resize/delete anything.
+
+function reassignZFromOrder(slots, orderedIds) {
+  const zById = new Map(orderedIds.map((id, i) => [id, i]));
+  return slots.map((s) => ({ ...s, z: zById.get(s.id) }));
+}
+
+function reorderSlotZ(slots, slotId, label, reorderIds) {
+  const orderedIds = sortByZOrder(slots).map((s) => s.id);
+  const pos = orderedIds.indexOf(slotId);
+  if (pos === -1) throw new Error(`${label}: no slot with id ${slotId}`);
+  return reassignZFromOrder(slots, reorderIds(orderedIds, pos));
+}
+
+// "上移一層" — swaps with the slot immediately above; no-op if already topmost.
+export function bringSlotForward(slots, slotId) {
+  return reorderSlotZ(slots, slotId, 'bringSlotForward', (ids, pos) => {
+    if (pos >= ids.length - 1) return ids;
+    const next = [...ids];
+    [next[pos], next[pos + 1]] = [next[pos + 1], next[pos]];
+    return next;
+  });
+}
+
+// "下移一層" — swaps with the slot immediately below; no-op if already bottommost.
+export function sendSlotBackward(slots, slotId) {
+  return reorderSlotZ(slots, slotId, 'sendSlotBackward', (ids, pos) => {
+    if (pos <= 0) return ids;
+    const next = [...ids];
+    [next[pos], next[pos - 1]] = [next[pos - 1], next[pos]];
+    return next;
+  });
+}
+
+// "移到最上" — moves to the very top, all others keep their relative order.
+export function bringSlotToFront(slots, slotId) {
+  return reorderSlotZ(slots, slotId, 'bringSlotToFront', (ids, pos) => {
+    const next = [...ids];
+    const [id] = next.splice(pos, 1);
+    next.push(id);
+    return next;
+  });
+}
+
+// "移到最下" — moves to the very bottom, all others keep their relative order.
+export function sendSlotToBack(slots, slotId) {
+  return reorderSlotZ(slots, slotId, 'sendSlotToBack', (ids, pos) => {
+    const next = [...ids];
+    const [id] = next.splice(pos, 1);
+    next.unshift(id);
+    return next;
+  });
 }
 
 // --- Free-drag creation (§9.4) ------------------------------------------

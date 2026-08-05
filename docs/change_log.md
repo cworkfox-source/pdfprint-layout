@@ -2,71 +2,6 @@
 
 > Older entries: docs/logs/ (archive, do not load at startup)
 
-## 2026-08-05 16:20
-
-### Type
-Docs
-
-### Summary
-建立本機 git 倉庫與遠端 GitHub public repo,推送目前的文件內容作為版本控制
-起點。
-
-### Files Changed
-- .gitignore(新增)、README.md(新增)
-- 首次 commit 涵蓋:AGENTS.md、CLAUDE.md、.antigravity_rules.md、docs/*、
-  README.md、.gitignore(不含程式碼,因尚未開始 Phase −1)
-
-### Reason
-使用者於 AskUserQuestion 選擇「現在就建 repo」「Public」,作為後續每次修改
-直接 push 的版本控制起點,而非等 Phase 11 build 完成才一次性建立。
-
-### Implementation Details
-`git init` → `git add` 指定檔案(非 `-a`,避免誤入未預期檔案)→ 初次 commit →
-`gh repo create cworkfox-source/pdfprint-layout --public --source=. --push`。
-執行細節與實際結果見下方 Verification Result。
-
-### Impact Analysis
-專案原始碼與文件自此有遠端備份;repo 目前公開但只含文件,不含任何使用者資料
-或機敏內容(已依 Boundaries「不得印出/寫入金鑰密碼個資」檢查)。
-
-### Verification Result
-PASS — repo 建立於 https://github.com/cworkfox-source/pdfprint-layout
-(public),root commit `8fbf7bb0`。commit 作者身分原被自動猜成
-`unknown <BASS000025@tccg.gov.tw>`(政府網域,不宜公開),經使用者確認後改為
-GitHub noreply 位址 `256346730+cworkfox-source@users.noreply.github.com`
-再 push,未推送任何含真實 email 的歷史。
-
-## 2026-08-05 16:35
-
-### Type
-Docs
-
-### Summary
-依使用者指示,`AGENTS.md`、`CLAUDE.md`、`.antigravity_rules.md` 三個 AI
-agent 治理規則檔改為只留本機,不再發布到 public GitHub repo。
-
-### Files Changed
-- .gitignore — 新增三行,忽略上述三個檔案
-- AGENTS.md、CLAUDE.md、.antigravity_rules.md — `git rm --cached`(僅取消
-  git 追蹤,本機檔案未刪除,仍正常生效)
-
-### Reason
-使用者要求這三個檔案「都不用上去(GitHub)」。已詢問是「只不上傳、本機保留」
-還是「本機也刪除」,使用者選擇前者——保留本機治理機制運作,只是不公開發布。
-
-### Implementation Details
-`git rm --cached` 三檔 → 加入 `.gitignore` → commit → push。舊 commit
-(`8fbf7bb0`、`7afb294`)歷史中仍含這三個檔案,因 AGENTS.md Hard Rules 禁止
-改寫歷史;只有目前與往後的檔案樹不再包含它們。
-
-### Impact Analysis
-公開 repo 現在只看得到產品文件(`docs/`、`README.md`),AI 治理規則對外不可見。
-本機端 AGENTS.md/CLAUDE.md 治理流程不受影響,之後每個 session 仍會照常運作。
-
-### Verification Result
-PASS — `git log -1` 確認已 push(`801ae4b`);本機 `ls` 確認三檔仍存在於
-工作目錄。
-
 ## 2026-08-05 17:00
 
 ### Type
@@ -640,3 +575,70 @@ PASS — two layers:
    and resets every transform field; the pixel-dimensioned image Source
    places and fits correctly despite its different unit from PDF-page
    Sources (see D-012).
+
+## 2026-08-05 23:15
+
+### Type
+Bugfix / Feature (gap-fill)
+
+### Summary
+Completeness audit of Phase 5 turned up two [M] MUST requirements that
+plan.md assigns to Phase 4 (merged in from another session) but that were
+never actually implemented: Lock/Unlock toggling (§10.3) and Z-order
+operations (§6.5). Both are now implemented.
+
+### Files Changed
+- src/free-layout.js — `setSlotLocked()` (unrestricted toggle) and
+  `bringSlotForward()`/`sendSlotBackward()`/`bringSlotToFront()`/
+  `sendSlotToBack()` (single-Slot, re-rank to a clean 0..n-1 z via
+  `sortByZOrder()`, not blocked by `locked`).
+- src/free-layout.test.js — 9 new tests.
+- src/reducers.js — 5 new action creators (`setSlotLockedAction` +
+  4 Z-order actions).
+- src/reducers.test.js — 2 new integration tests.
+- dev/free-layout.html — Lock/Unlock button (label reflects current state)
+  and 4 Z-order buttons, enabled only for a single selection; readout now
+  includes `z`.
+
+### Reason
+`free-layout.js` already ENFORCED locking (moveSlots skips locked members;
+setSlotRect/deleteSlots/splitSlot*/mergeSlots throw) and `geometry.js`
+already SORTS by z (`sortByZOrder()`, shared by Preview/Export per §4.3) —
+but nothing anywhere could actually flip `slot.locked` or change `slot.z`.
+Both mechanisms existed with no way to trigger them. Neither gap was
+recorded in decision_log D-011 (which covered other Phase 4 judgment calls)
+or project_status.md's Known Issues, so "Phase 0-4 已完成" was not quite
+accurate until now.
+
+### Implementation Details
+See decision_log D-013 for the three judgment calls: single-Slot (not
+multi-select) Z-order operations, matching how mainstream design tools treat
+"bring forward/to front"; z re-ranked to a clean contiguous 0..n-1 from
+`sortByZOrder()`'s output rather than nudging the raw z number by ±1 (which
+could silently no-op when the existing z values have wide gaps, e.g. from
+duplicateSlots()/mergeSlots() minting new z far outside the existing range);
+and Z-order changes are NOT blocked by `locked`, since §10.3 only names
+Move/Resize/Delete.
+
+### Impact Analysis
+No impact on Phase 5's own deliverables — this is purely filling in a gap
+in the Phase 4 foundation those and all future Slot-editing features sit on.
+Phase 6+ inherits a Free Layout Designer that now actually matches plan.md's
+§10.3/§6.5 [M] requirements.
+
+### Verification Result
+PASS — two layers:
+1. `npm test`: 204/204 passing (12 new this round: free-layout.js 10,
+   reducers.js 2; also includes 1 earlier addition this session — an
+   explicit §10.1 "same Source into multiple Slots" regression test in
+   reducers.js — bringing the running total from 191 to 204).
+2. Browser verification (`node scripts/dev-server.mjs` + Playwright against
+   `http://localhost:5173/dev/free-layout.html`, console clean): Bring to
+   Front / Send to Back / Bring Forward / Send Backward each produce the
+   exact expected z-order position; toggling Lock via the new button then
+   attempting a real mouse-drag on that Slot confirms it does NOT move
+   (Phase 4's existing enforcement correctly wired to the new toggle),
+   Unlock restores normal dragging; locking enters Undo history (not
+   `historyEntry:false` like Selection) and Undo correctly reverts it.
+
+## 2026-08-05 | Docs | Rotated 2 entries (2026-08-05 16:20, 16:35) to docs/logs/change_log_2026.md | wc -l verified (642 lines active after rotation)

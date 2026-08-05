@@ -36,6 +36,13 @@
   <button id="btn-split-v">Split Vertical (left/right)</button>
   <button id="btn-merge">Merge</button>
   <span>|</span>
+  <button id="btn-lock-toggle">Lock/Unlock (§10.3)</button>
+  <span>|</span>
+  <button id="btn-send-to-back">Send to Back</button>
+  <button id="btn-send-backward">Send Backward</button>
+  <button id="btn-bring-forward">Bring Forward</button>
+  <button id="btn-bring-to-front">Bring to Front</button>
+  <span>|</span>
   <button id="btn-undo">Undo (Ctrl+Z)</button>
   <button id="btn-redo">Redo (Ctrl+Y)</button>
 </div>
@@ -67,6 +74,11 @@
     splitSlotHorizontalAction,
     splitSlotVerticalAction,
     mergeSlotsAction,
+    setSlotLockedAction,
+    bringSlotForwardAction,
+    sendSlotBackwardAction,
+    bringSlotToFrontAction,
+    sendSlotToBackAction,
     setSelectionAction,
   } from '/src/reducers.js';
 
@@ -148,10 +160,16 @@
     $('btn-merge').disabled = !mergeable;
     $('merge-hint').textContent = selection.length >= 2 && !mergeable ? '選取的格位聯集不是矩形，無法合併（§9.3）' : '';
 
+    const singleSelected = selection.length === 1 ? slots.find((s) => s.id === selection[0]) : null;
+    for (const id of ['btn-lock-toggle', 'btn-send-to-back', 'btn-send-backward', 'btn-bring-forward', 'btn-bring-to-front']) {
+      $(id).disabled = !singleSelected;
+    }
+    $('btn-lock-toggle').textContent = singleSelected && singleSelected.locked ? 'Unlock (§10.3)' : 'Lock (§10.3)';
+
     $('readout').textContent = JSON.stringify({
       selection,
       historyDepth: store.historyDepth(),
-      slots: slots.map(({ id, x, y, w, h, locked }) => ({ id, x: +x.toFixed(4), y: +y.toFixed(4), w: +w.toFixed(4), h: +h.toFixed(4), locked })),
+      slots: slots.map(({ id, x, y, w, h, locked, z }) => ({ id, x: +x.toFixed(4), y: +y.toFixed(4), w: +w.toFixed(4), h: +h.toFixed(4), locked, z })),
     }, null, 2);
 
     window.__slots = slots;
@@ -367,6 +385,32 @@
     if (selection.length < 2) return;
     store.commit(mergeSlotsAction(PAGE_ID, selection), null);
     setSelection([]);
+  });
+  $('btn-lock-toggle').addEventListener('click', () => {
+    if (selection.length !== 1) return;
+    const slot = currentSlots().find((s) => s.id === selection[0]);
+    store.commit(setSlotLockedAction(PAGE_ID, selection[0], !slot.locked), null);
+    render();
+  });
+  $('btn-send-to-back').addEventListener('click', () => {
+    if (selection.length !== 1) return;
+    store.commit(sendSlotToBackAction(PAGE_ID, selection[0]), null);
+    render();
+  });
+  $('btn-send-backward').addEventListener('click', () => {
+    if (selection.length !== 1) return;
+    store.commit(sendSlotBackwardAction(PAGE_ID, selection[0]), null);
+    render();
+  });
+  $('btn-bring-forward').addEventListener('click', () => {
+    if (selection.length !== 1) return;
+    store.commit(bringSlotForwardAction(PAGE_ID, selection[0]), null);
+    render();
+  });
+  $('btn-bring-to-front').addEventListener('click', () => {
+    if (selection.length !== 1) return;
+    store.commit(bringSlotToFrontAction(PAGE_ID, selection[0]), null);
+    render();
   });
   $('btn-undo').addEventListener('click', () => { store.undo(); render(); });
   $('btn-redo').addEventListener('click', () => { store.redo(); render(); });

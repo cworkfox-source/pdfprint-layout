@@ -10,6 +10,11 @@ import {
   splitSlotVertical,
   canMergeSlots,
   mergeSlots,
+  setSlotLocked,
+  bringSlotForward,
+  sendSlotBackward,
+  bringSlotToFront,
+  sendSlotToBack,
   createSlotRectFromDrag,
   computeSnapTargetsX,
   computeSnapTargetsY,
@@ -183,6 +188,99 @@ test('mergeSlots throws for a locked target or fewer than 2 targets', () => {
   const b = slot({ id: 'b', x: 0.5, y: 0, w: 0.5, h: 1 });
   assert.throws(() => mergeSlots([a, b], ['a', 'b']), /locked/);
   assert.throws(() => mergeSlots([a, b], ['a']), /at least 2/);
+});
+
+// --- setSlotLocked (§10.3) ---------------------------------------------------------------
+
+test('setSlotLocked sets the flag true and false, leaving other fields untouched', () => {
+  const a = slot({ id: 'a', x: 0.1, y: 0.2 });
+  const locked = setSlotLocked([a], 'a', true);
+  assert.equal(locked[0].locked, true);
+  assert.equal(locked[0].x, 0.1);
+  const unlocked = setSlotLocked(locked, 'a', false);
+  assert.equal(unlocked[0].locked, false);
+});
+
+test('setSlotLocked throws for an unknown id', () => {
+  assert.throws(() => setSlotLocked([slot({ id: 'a' })], 'missing', true), /no slot with id/);
+});
+
+test('setSlotLocked + moveSlots: locking a slot makes a subsequent move silently skip it (§10.3 enforcement, integration)', () => {
+  const a = slot({ id: 'a', x: 0, y: 0 });
+  const locked = setSlotLocked([a], 'a', true);
+  const moved = moveSlots(locked, ['a'], 0.1, 0.1);
+  assert.equal(moved[0].x, 0); // still skipped, locked took effect
+});
+
+// --- Z-order (§6.5) ---------------------------------------------------------------
+
+function zOrderIds(slots) {
+  return [...slots].sort((a, b) => a.z - b.z).map((s) => s.id);
+}
+
+test('bringSlotForward swaps with the next slot up; no-op when already topmost', () => {
+  const a = slot({ id: 'a', z: 0 });
+  const b = slot({ id: 'b', z: 1 });
+  const c = slot({ id: 'c', z: 2 });
+  const result = bringSlotForward([a, b, c], 'a');
+  assert.deepEqual(zOrderIds(result), ['b', 'a', 'c']);
+  const noop = bringSlotForward(result, 'c'); // c is already topmost
+  assert.deepEqual(zOrderIds(noop), ['b', 'a', 'c']);
+});
+
+test('sendSlotBackward swaps with the next slot down; no-op when already bottommost', () => {
+  const a = slot({ id: 'a', z: 0 });
+  const b = slot({ id: 'b', z: 1 });
+  const c = slot({ id: 'c', z: 2 });
+  const result = sendSlotBackward([a, b, c], 'c');
+  assert.deepEqual(zOrderIds(result), ['a', 'c', 'b']);
+  const noop = sendSlotBackward(result, 'a'); // a is already bottommost
+  assert.deepEqual(zOrderIds(noop), ['a', 'c', 'b']);
+});
+
+test('bringSlotToFront moves to the top, preserving the relative order of everything else', () => {
+  const a = slot({ id: 'a', z: 0 });
+  const b = slot({ id: 'b', z: 1 });
+  const c = slot({ id: 'c', z: 2 });
+  const result = bringSlotToFront([a, b, c], 'a');
+  assert.deepEqual(zOrderIds(result), ['b', 'c', 'a']);
+});
+
+test('sendSlotToBack moves to the bottom, preserving the relative order of everything else', () => {
+  const a = slot({ id: 'a', z: 0 });
+  const b = slot({ id: 'b', z: 1 });
+  const c = slot({ id: 'c', z: 2 });
+  const result = sendSlotToBack([a, b, c], 'c');
+  assert.deepEqual(zOrderIds(result), ['c', 'a', 'b']);
+});
+
+test('Z-order ops re-derive a full contiguous 0..n-1 ranking, independent of the original (possibly non-contiguous) z values', () => {
+  // b (z:5) draws BEFORE a (z:100) — sortByZOrder is ascending, so the
+  // draw order is [b, a] (b at the bottom, a on top). bringSlotForward('b')
+  // swaps b up past a, landing on ['a', 'b'].
+  const a = slot({ id: 'a', z: 100 });
+  const b = slot({ id: 'b', z: 5 });
+  const result = bringSlotForward([a, b], 'b');
+  assert.deepEqual(zOrderIds(result), ['a', 'b']);
+  // the wide original gap (5 vs 100) must NOT survive — z is re-ranked to
+  // a clean, contiguous 0..n-1 matching the new draw order.
+  const bySlotId = Object.fromEntries(result.map((s) => [s.id, s.z]));
+  assert.deepEqual(bySlotId, { a: 0, b: 1 });
+});
+
+test('Z-order ops are NOT blocked by a locked slot (§10.3 only names Move/Resize/Delete)', () => {
+  const a = slot({ id: 'a', z: 0, locked: true });
+  const b = slot({ id: 'b', z: 1 });
+  const result = bringSlotToFront([a, b], 'a');
+  assert.deepEqual(zOrderIds(result), ['b', 'a']);
+});
+
+test('Z-order ops throw for an unknown id', () => {
+  const slots = [slot({ id: 'a' })];
+  assert.throws(() => bringSlotForward(slots, 'missing'), /no slot with id/);
+  assert.throws(() => sendSlotBackward(slots, 'missing'), /no slot with id/);
+  assert.throws(() => bringSlotToFront(slots, 'missing'), /no slot with id/);
+  assert.throws(() => sendSlotToBack(slots, 'missing'), /no slot with id/);
 });
 
 // --- createSlotRectFromDrag (§9.4) ---------------------------------------------------------------

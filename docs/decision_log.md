@@ -670,3 +670,107 @@ scale/rotation/offset/flip)完全共用,佐證 §4.3 等價性契約沒有被打
 若日後圖片 Source 需要「實際列印尺寸」(例如使用者輸入照片的實體寬高做
 DPI 感知的排版),需要回頭重新設計 §5.2 Source 的尺寸欄位語意,而不是
 繼續讓圖片停留在純像素單位。
+
+## D-013 — Phase 4 遺留缺口補完:鎖定／解鎖切換、Z-order 操作(Phase 5 完整性檢查發現)
+
+### Date
+2026-08-05
+
+### Topic
+架構 / 產品範圍 / 補完既有 Phase
+
+### Context
+完成 Phase 5(Source Placement)後,依使用者要求「檢查是否有未完成部分」
+逐條核對 plan.md 的 [M] 需求與現有程式碼,發現兩個標記 **[M] 必須**、但
+Phase 4(由另一個 session 完成、經 fast-forward 併入本分支)完全沒有實作
+的項目:
+
+1. **§10.3「鎖定／解鎖」**:`free-layout.js` 只實作了鎖定的**強制執行**
+   (`moveSlots` 靜默略過、`setSlotRect`/`deleteSlots`/`splitSlot*`/
+   `mergeSlots` 對鎖定目標 throw,見 D-011),但整個程式碼庫**沒有任何
+   函式能把 `slot.locked` 實際設成 true/false**——鎖定機制形同虛設,因為
+   根本無法觸發它。
+2. **§6.5「Z-order 與重疊」的 UI 需求**(「上移一層／下移一層／移到最上／
+   移到最下」),且 plan.md §22 明確把「Z-order」列在 Phase 4 的範圍內。
+   `geometry.js` 的 `sortByZOrder()`(Phase 0 就寫好、Preview/Export 共用
+   的排序函式)只能「读」既有的 `z`,**沒有任何函式能修改 `z`**。
+
+兩者都不屬於「Phase 5」本身在 §22 的範圍(拖曳放置、Fit/Fill/Stretch、
+Rotation、Scale、Offset、Flip、Clip),是被合併進來的 Phase 4 工作遺漏,
+且未被 decision_log D-011 或 project_status.md 的 Known Issues 記錄過。
+
+### Alternatives Considered
+(1) 鎖定／解鎖:
+  A. 在 `free-layout.js`(既有鎖定強制執行邏輯的所在檔案)新增
+     `setSlotLocked(slots, slotId, locked)`,不對「切換動作本身」加任何
+     限制(必須能鎖也必須能解鎖,否則鎖定會變成單向陷阱)。
+  B. 放進 `slot-content.js`(Phase 5 新檔案),理由是它也是「Slot 欄位
+     編輯」。
+
+(2) Z-order 操作的目標範圍:
+  A. 只支援單一 Slot(`slotId`,不支援陣列)——比照多數設計工具
+     (PowerPoint/Illustrator/Figma)把「上移一層/移到最上」當成單一物件
+     的操作;「整組多選、同時上移並保留組內相對順序」是另一個更複雜、
+     plan.md 原文完全沒有提及的需求。
+  B. 支援多選(`slotIds` 陣列),比照 `moveSlots`/`deleteSlots` 的介面。
+
+(3) Z-order 語意(「層」指什麼):
+  A. 「層」= §6.5 `sortByZOrder()` 排序後的**位置**(z 升冪 + 陣列索引
+     tie-break),每次操作後把整個排序重新映射回一組乾淨的 `0..n-1` z
+     值——不管操作前的原始 `z` 數值是否連續(`duplicateSlots`/
+     `mergeSlots` 本來就會產生任意大小的新 `z`)。
+  B. 「層」= 原始 `z` 數值本身(例如 +1/-1),不重新映射。
+
+(4) 鎖定的 Slot 能否被 Z-order 操作:
+  A. 可以——§10.3 原文只點名 Move/Resize/Delete,沒提到繪製順序。
+  B. 也一併擋下(比照其他鎖定限制)。
+
+### Selected Solution
+(1) A。(2) A。(3) A。(4) A。
+
+### Reason
+(1)A 案讓「鎖定的強制執行」與「鎖定的切換」留在同一個檔案,單一職責,
+且不需要 Phase 5 的 `slot-content.js` 認識「鎖定」這個跟內容編輯完全無關
+的概念;B 案會讓鎖定邏輯分散在兩個檔案,增加日後修改的認知負擔。
+(2)A 案符合 plan.md 原文字面(§6.5 只寫「上移一層／下移一層／移到最上／
+移到最下」,讀起來就是單物件操作,沒有「保留多選內部順序」這種額外語意);
+B 案是憑空替 plan.md 加需求,且會讓實作與測試複雜度不成比例地增加。
+(3)A 案確保操作結果對「Preview 與 Export 必須用同一 `sortByZOrder()`」
+這個既有契約(§6.5)保持穩定——不管歷史上 `z` 被 `duplicateSlots`/
+`mergeSlots` 弄出什麼奇怪的數值,Z-order 操作後永遠回到一組乾淨的
+`0..n-1`;B 案(直接 ±1)在 `z` 本身有大間距或重複值時,可能導致「上移
+一層」實際排序位置不變(因為新 z 值仍然小於下一個既有 z),使用者會覺得
+按鈕沒有反應。
+(4)A 案是最省事、也最貼近 §10.3 原文的讀法;B 案會讓「鎖定」的定義從
+「防止誤觸的幾何變更」擴大成「凍結繪製順序」,原文沒有這層意思,屬於
+過度推測。
+
+### Consequences
+- `src/free-layout.js` 新增 `setSlotLocked()`(無限制,可雙向切換)與
+  四個 Z-order 函式:`bringSlotForward()`/`sendSlotBackward()`/
+  `bringSlotToFront()`/`sendSlotToBack()`,皆為單一 `slotId`、皆呼叫共用
+  的內部 `reorderSlotZ()`(取得 `sortByZOrder()` 排序 → 依操作重新排列
+  id 列表 → 重新映射為 `0..n-1` 的 `z`)。四者對鎖定的 Slot 一律允許
+  (不 throw)。
+- `src/reducers.js` 新增對應 5 個 action creator(`setSlotLockedAction`/
+  `bringSlotForwardAction`/`sendSlotBackwardAction`/
+  `bringSlotToFrontAction`/`sendSlotToBackAction`),與既有 Free Layout
+  action 共用 `updatePageSlots()`。
+- `dev/free-layout.html`(Phase 4 dev harness)新增對應按鈕:單選時啟用,
+  Lock 按鈕文字依目前鎖定狀態顯示「Lock」/「Unlock」;readout 補上 `z`
+  欄位方便人工核對。
+- 13 個新單元測試(`free-layout.js` 9、`reducers.js` 2 個整合測試,共
+  204 個)+ 瀏覽器實測(Playwright:Bring to Front/Send to Back/Bring
+  Forward/Send Backward 依序驗證排序位置;Lock 按鈕切換後,對該 Slot 的
+  真實滑鼠拖曳確認完全不動,Unlock 後同一段拖曳確認恢復可動——證明新增的
+  切換入口與 Phase 4 既有的強制執行邏輯正確串接;鎖定/解鎖進入 Undo
+  history 且可正確復原)全數通過,console 無錯誤。
+- `docs/project_status.md` 的 Phase 4 完成項目與「Phase 0-4 已完成」的
+  TL;DR 表述已回頭補上這兩項(原本的表述不完全準確,因為兩個 [M] 項目
+  當時其實缺漏)。
+
+### Future Review Conditions
+若日後需要「多選整組上移一層並保留組內相對順序」這種更進階的 Z-order
+批次操作,回頭重新設計(2)的介面,而不是勉強用現有的單一 `slotId` 函式
+疊加迴圈(疊加迴圈在多選情境下,「上移一層」對每個成員各自處理時,彼此的
+相對順序可能被打亂,需要專門設計)。
