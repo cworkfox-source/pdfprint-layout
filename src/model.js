@@ -30,6 +30,11 @@ export function createSource(overrides = {}) {
     cropBox: overrides.cropBox ?? null,
     mediaBox: overrides.mediaBox ?? null,
     thumbUrl: overrides.thumbUrl ?? null,
+    // §12.3 — key into SourceBinaryStore for this Source's original file
+    // bytes. Every page-Source parsed from the same PDF file shares one
+    // docId (one set of original bytes per file, not per page); an
+    // image Source's docId is its own id (1:1 file-to-source).
+    docId: overrides.docId ?? null,
   };
 }
 

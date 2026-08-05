@@ -168,6 +168,11 @@ AppState
   mediaBox: { x, y, w, h },
 
   thumbUrl: null,            // 縮圖 ObjectURL，可被 LRU 回收
+
+  docId: null,               // 指向 SourceBinaryStore 內原始 bytes 的 key
+                              // （Phase 2 新增）；同一 PDF 檔的所有頁 Source
+                              // 共用一個 docId，image Source 的 docId 等於自己
+                              // 的 id（1:1）。
 }
 ```
 

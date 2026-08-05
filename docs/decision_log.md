@@ -305,3 +305,86 @@ dynamic import / Blob URL module Worker)與正式 esbuild 產物的行為一致,
 
 ### Future Review Conditions
 Phase 11 開始前,或使用者決定要在此開發機安裝 Node.js 時重新檢視。
+
+## D-009 — Phase 2 Source Engine:docId 設計、cropBox/mediaBox 取值範圍、開發用 pdf.js 版本改 pin v5.4.149
+
+### Date
+2026-08-05
+
+### Topic
+架構 / 資料模型 / 開發工具鏈
+
+### Context
+實作 Phase 2 Source Engine 時遇到三個 plan.md 未明訂細節的缺口:
+1. §5.2 的 Source 物件沒有欄位指向 §12.3 SourceBinaryStore 的原始 bytes——
+   一份多頁 PDF 產生多個 page-Source,但原始 bytes 只應存一份,需要某種
+   共用 key。
+2. §13.5/§14.4 要求 Preview 與 Export 都以 CropBox 為準,但 PDF.js 的公開
+   `PDFPageProxy` API 只曝露一個已經是 CropBox∩MediaBox 結果的 `page.view`,
+   不曝露獨立的原始 MediaBox。
+3. 實測時發現本開發環境(Playwright 內建 Chromium 141)以 spike 選用的
+   pdf.js v6.2.108 render 任何頁面都拋
+   `TypeError: ...getOrInsertComputed is not a function`——v6.2.108 的
+   `pdf.mjs` 直接呼叫了 TC39 尚在 Stage 2/3 的 `Map.prototype.
+   getOrInsertComputed`,此開發環境的 V8 版本尚未支援。
+
+### Alternatives Considered
+(1) docId:
+  A. Source 新增 `docId` 欄位,同一檔案的所有頁 Source 共用一個 docId,
+     image Source 的 docId 等於自己的 id(1:1)。
+  B. 用 `fileName` 當 key(可能重複、不穩定)。
+  C. SourceBinaryStore 直接以 sourceId 為 key,每頁各存一份原始 bytes
+     (記憶體浪費 N 倍)。
+
+(2) cropBox/mediaBox:
+  A. Phase 2 只用 `page.view` 同時填 cropBox 與 mediaBox 兩欄位(視為
+     Preview 用的便利欄位),Export(Phase 7)重新從 pdf-lib 對
+     SourceBinaryStore 的原始 bytes 取得權威的 MediaBox/CropBox 兩者,不
+     依賴這裡存的值。
+  B. Phase 2 就想辦法從 PDF.js 內部 API 挖出真正獨立的 MediaBox(依賴未公開
+     行為,版本間不穩定)。
+  C. Phase 2 直接用 pdf-lib 另外解析一次同一份 bytes 取得雙 box(多一次
+     parse 成本,且 pdf-lib 在 Phase 2 階段還不需要引入)。
+
+(3) pdf.js 開發版本:
+  A. 開發/測試改 pin v5.4.149(不含該新 API),spike 既有的
+     `spike/fetch-vendor.sh`(v6.2.108,Phase −1 驗證記錄)維持不動。
+  B. 想辦法升級此環境的 Chromium。
+  C. 全專案(含未來 Phase 11 正式 build)改 pin v5.4.149。
+
+### Selected Solution
+均選 A。
+
+### Reason
+docId 的 A 案是唯一同時滿足「多頁共用一份 bytes」與「圖片 1:1」且不引入額外
+穩定性風險的做法,成本只是 model.js 多一個 nullable 欄位。cropBox/mediaBox
+的 A 案符合 §14.4 本來就要求 Export 端權威來源是 pdf-lib 對 SourceBinaryStore
+原始 bytes 的解析,Phase 2 沒有理由提前做 Phase 7 的事,且能維持公開 API,不
+依賴 PDF.js 未公開內部結構。pdf.js 版本的 A 案把「這個開發環境的 Chromium
+版本落後於 v6.2.108 所需的 V8 版本」與「Phase −1 已驗證通過的紀錄」分開處理
+——不去動一份已經寫進 change_log/README 的歷史驗證證據,只在「目前開發用」
+的新腳本換版本;B 不在 agent 控制範圍內;C 過早鎖死正式 build 的版本,且
+v6.2.108 本身沒有其他已知問題,未來此環境 Chromium 更新後仍可能改回。
+
+### Consequences
+- `src/model.js` `createSource()` 新增 `docId`(nullable,預設 null);
+  `docs/plan.md` §5.2 同步補上此欄位與註解。
+- `src/sources.js` 對每個 docId 做 ref-count:同一 PDF 檔案的多個
+  page-Source 共用一份 SourceBinaryStore bytes 與一個開啟中的 PDF.js
+  document,最後一個引用它的 Source 被 release 時才真正 `binaryStore.
+  remove()` 與 `loadingTask.destroy()`(已用 Playwright 實測驗證:刪除
+  3 頁 PDF 中的 1 頁,doc 與 bytes 仍在;刪光才真正釋放)。
+- Source 的 `cropBox`/`mediaBox` 兩欄位在 Phase 2 階段永遠相等(都來自
+  `page.view`),**不得**被 Phase 7 Export 直接信任為權威 MediaBox——
+  Export 必須照 §14.4 原文重新從 pdf-lib 對 SourceBinaryStore 的原始 bytes
+  取得,這裡只是 Preview 階段的便利值,已在 `src/sources.js` 加註解防止
+  未來誤用。
+- 新增 `scripts/fetch-vendor.sh`(pin v5.4.149,供 Phase 2+ 開發/dev
+  harness 使用),`spike/fetch-vendor.sh`(pin v6.2.108)維持原樣不變,兩者
+  刻意分離、寫明各自用途避免互相覆寫時搞混。
+
+### Future Review Conditions
+Phase 7 Export 實作時確認 pdf-lib 是否真的能穩定取得獨立 MediaBox/CropBox
+(若不行需回頭重新設計);此開發環境 Chromium 版本更新、或確認正式 Release
+build 目標瀏覽器已支援 `Map.prototype.getOrInsertComputed` 時,重新評估是否
+把 pdf.js pin 回 v6.2.108 或更新版本。

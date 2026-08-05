@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>Phase 2 dev harness — Source Engine</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 1rem; color: #222; }
+  h1 { font-size: 1.1rem; }
+  .controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+  .controls label { display: flex; flex-direction: column; font-size: 12px; gap: 2px; }
+  #gallery { display: flex; flex-wrap: wrap; gap: 12px; border: 1px solid #ccc; padding: 12px; min-height: 120px; background: #fafafa; }
+  .tile { width: 140px; border: 1px solid #ddd; background: #fff; padding: 6px; font-size: 11px; word-break: break-all; }
+  .tile img { width: 100%; height: 100px; object-fit: contain; background: #eee; display: block; }
+  .tile .placeholder { width: 100%; height: 100px; background: #eee; display: flex; align-items: center; justify-content: center; color: #999; }
+  .tile button { margin-top: 4px; width: 100%; }
+  #log { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; margin-top: 1rem; border-top: 1px solid #ccc; padding-top: 0.5rem; max-height: 240px; overflow: auto; }
+  #stats { font-family: ui-monospace, monospace; font-size: 12px; margin-top: 0.5rem; }
+  .fail { color: #b00020; }
+  .pass { color: #0a7d28; }
+</style>
+</head>
+<body>
+<h1>Phase 2 dev harness — 不是產品 UI，僅供人工／自動化檢查 Source Engine（見 docs/plan.md Phase 2）</h1>
+
+<div class="controls">
+  <label>PDF / Image 檔案
+    <input id="file-input" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,image/*,application/pdf">
+  </label>
+  <label>PDF 頁碼範圍（§12.2，例如 1-5,8 / odd / even，留空 = all）
+    <input id="page-range" type="text" placeholder="all">
+  </label>
+  <button id="delete-all">Delete All Sources</button>
+</div>
+
+<div id="gallery"></div>
+<div id="stats"></div>
+<div id="log"></div>
+
+<script type="module">
+  import * as pdfjsLib from '/vendor/pdfjs/pdf.mjs';
+  import { createSourceEngine } from '/src/sources.js';
+  import { renderPdfPageThumbnail, decodeImage, renderImageThumbnail } from '/src/render-adapters.js';
+  import { createBinaryStore } from '/src/binary-store.js';
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.mjs';
+
+  const $ = (id) => document.getElementById(id);
+  const gallery = $('gallery');
+  const logEl = $('log');
+  const statsEl = $('stats');
+
+  const log = (msg, ok) => {
+    const line = document.createElement('div');
+    line.className = ok === undefined ? '' : (ok ? 'pass' : 'fail');
+    const prefix = ok === undefined ? '·' : (ok ? '[PASS]' : '[FAIL]');
+    line.textContent = `${prefix} ${msg}`;
+    logEl.appendChild(line);
+    console.log(prefix, msg);
+  };
+
+  const binaryStore = createBinaryStore();
+  const sources = new Map(); // sourceId -> Source
+
+  const engine = createSourceEngine({
+    binaryStore,
+    renderPdfPageThumbnail,
+    decodeImage,
+    renderImageThumbnail,
+    onThumbnailReady: (sourceId, thumb) => {
+      const img = document.querySelector(`[data-source-id="${sourceId}"] img`);
+      const placeholder = document.querySelector(`[data-source-id="${sourceId}"] .placeholder`);
+      if (img) {
+        img.src = thumb.url;
+        img.style.display = '';
+        if (placeholder) placeholder.style.display = 'none';
+      }
+      log(`縮圖完成 ${sourceId} (${thumb.width}x${thumb.height})`, true);
+      updateStats();
+    },
+    onThumbnailError: (sourceId, err) => {
+      log(`縮圖失敗 ${sourceId}: ${err.message}`, false);
+    },
+  });
+
+  function renderTile(source) {
+    const tile = document.createElement('div');
+    tile.className = 'tile';
+    tile.dataset.sourceId = source.id;
+    tile.innerHTML = `
+      <div class="placeholder">載入中…</div>
+      <img style="display:none">
+      <div>${source.kind}${source.kind === 'pdf-page' ? ` p${source.pageIndex + 1}` : ''}</div>
+      <div>${source.fileName ?? ''}</div>
+      <div>${source.naturalWidth.toFixed(1)} × ${source.naturalHeight.toFixed(1)} pt</div>
+      ${source.kind === 'pdf-page' ? `<div>/Rotate ${source.pageRotate}</div>` : ''}
+      <button data-action="delete">Delete</button>
+    `;
+    tile.querySelector('[data-action="delete"]').addEventListener('click', async () => {
+      await engine.releaseSource(source);
+      sources.delete(source.id);
+      tile.remove();
+      log(`已釋放 Source ${source.id}`, true);
+      updateStats();
+    });
+    gallery.appendChild(tile);
+  }
+
+  function updateStats() {
+    const internal = engine._internal;
+    statsEl.textContent = [
+      `sources: ${sources.size}`,
+      `binaryStore docs: ${binaryStore.size()} (${binaryStore.totalBytes()} bytes)`,
+      `thumbnailCache: ${internal.thumbnailCache.size()}`,
+      `openPdfDocs: ${internal.openPdfDocs.size}`,
+      `renderQueue active/queued: ${internal.renderQueue.activeCount()}/${internal.renderQueue.queuedCount()}`,
+    ].join('  |  ');
+  }
+
+  async function handleFiles(fileList) {
+    const pageRange = $('page-range').value.trim() || 'all';
+    for (const file of fileList) {
+      try {
+        if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+          const t0 = performance.now();
+          const newSources = await engine.loadPdfFile(file, { pdfjsLib, pageRange });
+          log(`載入 PDF ${file.name}：${newSources.length} 頁，耗時 ${(performance.now() - t0).toFixed(0)} ms`, true);
+          for (const s of newSources) {
+            sources.set(s.id, s);
+            renderTile(s);
+          }
+        } else {
+          const s = await engine.loadImageFile(file);
+          sources.set(s.id, s);
+          renderTile(s);
+          log(`載入圖片 ${file.name}：${s.naturalWidth}x${s.naturalHeight}`, true);
+        }
+      } catch (err) {
+        log(`載入失敗 ${file.name}: ${err.message}`, false);
+        console.error(err);
+      }
+    }
+    updateStats();
+  }
+
+  $('file-input').addEventListener('change', (e) => {
+    if (e.target.files.length) handleFiles(e.target.files);
+  });
+
+  $('delete-all').addEventListener('click', async () => {
+    await engine.releaseAllSources(Array.from(sources.values()));
+    sources.clear();
+    gallery.innerHTML = '';
+    log('已執行 releaseAllSources()', true);
+    updateStats();
+  });
+
+  updateStats();
+  log('就緒，請選擇 PDF 或圖片檔案');
+
+  // Test-only hooks for scripted (Playwright) verification — same pattern
+  // as spike/app.js's window.__spikeHandleFile.
+  window.__sourceEngine = engine;
+  window.__sources = sources;
+  window.__binaryStore = binaryStore;
+  window.__handleFiles = handleFiles;
+  window.__waitForAllThumbnails = () => engine.waitForAllThumbnails();
+</script>
+</body>
+</html>
