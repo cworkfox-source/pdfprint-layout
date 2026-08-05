@@ -2,64 +2,6 @@
 
 > Older entries: docs/logs/ (archive, do not load at startup)
 
-## 2026-08-05 17:00
-
-### Type
-Feature
-
-### Summary
-完成 Phase −1 可行性 Spike 並通過(見 plan.md §22 Phase −1、§23.1)。
-`spike/dist/index.html` 在 `file://` 下驗證:ESM 透過 Blob URL 動態載入、
-PDF.js Worker 透過 Blob URL 運作、原始 PDF bytes 未被 PDF.js detach 且可交給
-pdf-lib 匯出。
-
-### Files Changed
-- spike/app.js、spike/template.html、spike/build.py(新增,已 commit)
-- spike/README.md、spike/fetch-vendor.sh(新增,已 commit)
-- vendor/pdfjs/、vendor/pdf-lib/(新增,**不 commit**,由 fetch-vendor.sh 重現)
-- .gitignore(新增 `/vendor/`、`/spike/dist/`)
-
-### Reason
-使用者指示「開始依計畫編寫程式」。plan.md 明訂 Phase −1 未通過不得進入
-Phase 0,故從此處開始,而非直接寫 Data Model。
-
-### Implementation Details
-開發機未安裝 Node.js/npm(`node`/`npm` 均 command not found),無法用 D-004
-指定的 esbuild。改用 `curl` 直接下載 pdf.js v6.2.108 官方 dist(`pdf.mjs`、
-`pdf.worker.mjs`,皆為自足的單檔 ESM,無外部 relative import)與 pdf-lib
-1.17.1 的官方 UMD build,再用一個不需 Node 的 Python 腳本
-(`spike/build.py`)把它們與測試邏輯串接成單一 HTML。
-
-驗證出的關鍵技術手法(供 Phase 0+ 沿用,已寫入 `spike/README.md`):
-1. pdf.js 原始碼整段內嵌為純文字,執行期包 `Blob` → `blob:` URL →
-   `import(blobUrl)` 動態載入,繞過 `<script type="module" src="file:...">`
-   在 Chrome file:// 下的 CORS 阻擋。
-2. `pdf.worker.mjs` 同法包成 `blob:` URL 設給
-   `GlobalWorkerOptions.workerSrc`,`new Worker(url,{type:'module'})` 正常運作。
-3. pdf-lib 用官方 UMD build 直接以 classic `<script>` 內嵌,無 ESM 疑慮。
-4. `file.arrayBuffer()` 後立即 `buffer.slice(0)` 給 PDF.js,原始 buffer 全程
-   保留給 pdf-lib——實測未被 detach,證實 §12.3 規則可行。
-
-### Impact Analysis
-證實產品定位(單檔、離線、`file://` 雙擊執行)技術上可行,可以進入 Phase 0。
-但發現本機開發環境缺 Node.js/npm,是 Phase 11(esbuild 正式 build)前必須解決
-的環境缺口,已記入 decision_log D-008 與 project_status Known Issues。
-另外發現 pdf.js v6 API 變更:`PDFDocumentProxy.destroy()` 已移除,只剩
-`.cleanup()`,完整釋放需呼叫 `loadingTask.destroy()`——初版 spike 程式碼因此
-噴錯,已修正,細節見 `spike/app.js` 註解。
-
-### Verification Result
-PASS — 於 Claude Browser 以 `file://` 開啟 `spike/dist/index.html` 實測(非僅
-程式碼審查):
-1. 頁面載入無 console 錯誤;`window.PDFLib` 與 ESM 動態載入皆成功。
-2. 用 pdf-lib 在頁面內即時產生一份 2 頁測試 PDF(因本沙盒環境無法操作原生
-   檔案選取對話框,改用 `window.__spikeHandleFile()` debug hook 餵入同一條
-   程式路徑,詳見 `spike/app.js` 註解),PDF.js 於 67–114 ms 內 render 出第 1
-   頁,Canvas 像素檢查確認非空白(1579 個非白像素)。
-3. 原始 ArrayBuffer 於 PDF.js 使用後以 `new Uint8Array()` 檢測未被 detach。
-4. 同一份原始 bytes 交給 pdf-lib 成功複製第 1 頁並輸出新 PDF(870 bytes)。
-全數符合 plan.md §23.1 的四項驗收條件。
-
 ## 2026-08-05 17:40
 
 ### Type
@@ -642,3 +584,65 @@ PASS — two layers:
    `historyEntry:false` like Selection) and Undo correctly reverts it.
 
 ## 2026-08-05 | Docs | Rotated 2 entries (2026-08-05 16:20, 16:35) to docs/logs/change_log_2026.md | wc -l verified (642 lines active after rotation)
+
+## 2026-08-06 00:30
+
+### Type
+Feature
+
+### Summary
+Phase 6 Auto Imposition: Auto Fill (spread a list of Sources across as many
+generated Output Pages as a chosen layout needs), fill-rule controls
+(sequential/reverse order, odd/even filter, repeat-N), and Output Pages
+management (add/delete/duplicate/reorder).
+
+### Files Changed
+- src/auto-fill.js (created) — `applyFillRule()`, `generateAutoFillPages()`/
+  `generateAutoFillPageObjects()`, `detectMixedSourceSizes()`.
+- src/auto-fill.test.js (created) — 17 tests, including the exact plan.md
+  §11.1 worked example (30 sources + 4-up -> 8 pages, last page 2+2).
+- src/pages.js (created) — `addPage`/`deletePage`/`duplicatePage`/`movePage`.
+- src/pages.test.js (created) — 12 tests.
+- src/reducers.js — `autoFillAction()` + 4 page-management action creators.
+- src/reducers.test.js — 6 new tests.
+- dev/auto-fill.html (created) — Phase 6 dev harness.
+
+### Reason
+Next phase per plan.md §22 after Phase 5 (Source Placement). Phase 6 is the
+first phase where a single action can change the NUMBER of Output Pages
+rather than just one page's Slots, so it needed a new reducer shape
+(`autoFillAction`/page-management actions) alongside the existing
+`updatePageSlots()`-based ones.
+
+### Implementation Details
+See decision_log D-014 for the three judgment calls: collapsing plan.md
+§11.2's six listed fill "modes" into three orthogonal knobs (order/filter/
+repeatCount) since the only worked example only ever demonstrates one
+source repeated a fixed count; Auto Fill replaces the template page in
+place (same array position) rather than leaving it untouched or requiring a
+separate blank template; and `deletePage()` refuses to remove the last
+remaining page, mirroring how Phase 4 guards the last Slot.
+
+### Impact Analysis
+Phase 7 (PDF Export) will iterate `AppState.pages` to render each page —
+Auto Fill-generated pages are ordinary Page objects with no special marker,
+so Export needs no Auto-Fill-specific handling. Phase 9 (Project System)'s
+save/load must round-trip the full `pages` array Auto Fill can now grow
+arbitrarily large.
+
+### Verification Result
+PASS — two layers:
+1. `npm test`: 238/238 passing (34 new: auto-fill.js 17, pages.js 12,
+   reducers.js 5; running total 204 -> 238).
+2. Browser verification (`node scripts/dev-server.mjs` + Playwright against
+   a synthetic 3-page mixed-size PDF (A4/A3/`/Rotate 90`) + a synthetic
+   image, opening `http://localhost:5173/dev/auto-fill.html`, console
+   clean): loaded 4 sources with genuinely differing sizes correctly
+   triggers the §11.4 mixed-size hint; setting `repeatCount=30` on a single
+   source through the real UI reproduces plan.md's own §11.1 numbers
+   exactly (8 pages, last page 2 filled + 2 empty); sequential vs. reverse
+   order actually reverses fill order with 4 distinct real sources;
+   filter:"odd" keeps exactly 2 of 4; Duplicate/Delete/Move Up all update
+   both the DOM and the store state correctly.
+
+## 2026-08-06 | Docs | Rotated 1 entry (2026-08-05 17:00) to docs/logs/change_log_2026.md | wc -l verified (646 lines active after rotation)

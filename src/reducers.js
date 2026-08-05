@@ -37,6 +37,8 @@ import {
   setSlotFlip,
   clearSlotContent,
 } from './slot-content.js';
+import { applyFillRule, generateAutoFillPageObjects } from './auto-fill.js';
+import { addPage, deletePage, duplicatePage, movePage } from './pages.js';
 
 function updatePageSlots(state, pageId, updateFn) {
   const pageIndex = state.pages.findIndex((p) => p.id === pageId);
@@ -147,4 +149,42 @@ export function setSlotFlipAction(pageId, slotId, flipX, flipY) {
 
 export function clearSlotContentAction(pageId, slotId) {
   return (state) => updatePageSlots(state, pageId, (slots) => clearSlotContent(slots, slotId));
+}
+
+// --- Auto Imposition (§11, Phase 6) ---------------------------------------
+// Auto Fill replaces one "template" page (its Slot layout, NOT its current
+// content) with as many generated pages as needed to place every id in
+// `sourceIds` (already run through applyFillRule's order/filter/repeat) —
+// this is a different shape than updatePageSlots() above since it can grow
+// or shrink the number of PAGES, not just one page's slots.
+export function autoFillAction(templatePageId, sourceIds, fillOptions) {
+  return (state) => {
+    const pageIndex = state.pages.findIndex((p) => p.id === templatePageId);
+    if (pageIndex === -1) throw new Error(`No page with id ${templatePageId}`);
+    const templatePage = state.pages[pageIndex];
+    const expandedIds = applyFillRule(sourceIds, fillOptions);
+    const generatedPages = generateAutoFillPageObjects(templatePage.paper, templatePage.slots, expandedIds);
+
+    const pages = [...state.pages];
+    pages.splice(pageIndex, 1, ...generatedPages);
+    return { ...state, pages };
+  };
+}
+
+// --- Output Pages management (§11.3, Phase 6) -----------------------------
+
+export function addPageAction(newPage, index) {
+  return (state) => ({ ...state, pages: addPage(state.pages, newPage, index) });
+}
+
+export function deletePageAction(pageId) {
+  return (state) => ({ ...state, pages: deletePage(state.pages, pageId) });
+}
+
+export function duplicatePageAction(pageId) {
+  return (state) => ({ ...state, pages: duplicatePage(state.pages, pageId) });
+}
+
+export function movePageAction(pageId, toIndex) {
+  return (state) => ({ ...state, pages: movePage(state.pages, pageId, toIndex) });
 }

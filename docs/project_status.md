@@ -2,16 +2,16 @@
 
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
 Visual Page Imposition Designer,public repo
-https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-5 已完成**
+https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-6 已完成**
 (geometry/store/model + paper/margin/zoom/print-CSS + PDF/圖片 Source
-Engine + Layout Engine preset/自訂 Grid + Free Layout Designer(含補完的
-鎖定/解鎖切換與 Z-order 操作)+ Source Placement 含 Fit/Cover/Stretch/
-Rotation/Scale/Offset/Flip/Clip 與 §12.7 中解析度 Canvas Preview,204 個
-單元測試 + 瀏覽器實測皆通過)。下一步:Phase 6 Auto Imposition(Auto
-Fill、Page Generation、Repeat、Odd/Even)。無 blocker。
+Engine + Layout Engine + Free Layout Designer(含鎖定/解鎖、Z-order)+
+Source Placement(Fit/Cover/Stretch/Rotation/Scale/Offset/Flip/Clip)+
+Auto Imposition(Auto Fill、順序/逆序/奇偶/重複 N 次、Output Pages
+管理),238 個單元測試 + 瀏覽器實測皆通過)。下一步:Phase 7 PDF Export
+(pdf-lib 輸出,產品核心價值與最大技術風險)。無 blocker。
 
 ## Current Version
-Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 5 完成
+Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 6 完成
 (含 Phase 4 遺留的鎖定/解鎖、Z-order [M] 缺口補完,見 D-013;無產品 UI,
 僅引擎與 dev 檢查頁)
 
@@ -207,12 +207,42 @@ Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 5 �
   - 判斷點(單一 Slot 而非多選、z 語意為排序位置而非原始數值、鎖定不擋
     Z-order)見 decision_log D-013。
 
+- Phase 6 Auto Imposition(2026-08-05):
+  - `src/auto-fill.js` — 純函式:`applyFillRule(sourceIds, {order,
+    filter, repeatCount})` 把 §11.2 的填版規則收斂成三個正交參數
+    (order: sequential/reverse;filter: all/odd/even,依列表 1-based
+    位置而非來源自己的 PDF 頁碼;repeatCount: 正整數,連續重複);
+    `generateAutoFillPages()`/`generateAutoFillPageObjects()` 把展開後的
+    id 序列依模板 Slot 數切成多頁,每頁 Slot 保留模板的全部
+    fitMode/scale/rotation/offset/flip/z、只換 id 與 sourceId,空清單仍
+    固定產生 1 頁(全清空,不是 0 頁);`detectMixedSourceSizes()` 供
+    §11.4 UI 提示用。語意判斷點見 decision_log D-014。
+  - `src/pages.js` — §11.3 Output Pages 管理:`addPage()`/`deletePage()`
+    (只剩 1 頁時 throw,Project 不可以沒有任何頁)/`duplicatePage()`
+    (連 Slot 內容一起複製,不同於 Template 的 §17.3 規則)/`movePage()`
+    (索引超出範圍時 clamp)。
+  - `src/reducers.js` 新增 `autoFillAction()`(取模板頁目前的 slots 版型,
+    執行後在 `state.pages` 中原地整段替換成產生的新頁,其餘頁不受影響)
+    與 4 個頁面管理 action creator。
+  - `dev/auto-fill.html` — Phase 6 dev harness:Source Gallery(沿用
+    Phase 2/5 引擎)、版型 Preset 下拉、順序/篩選/重複次數控制、Output
+    Pages 面板(每頁縮圖 + Duplicate/Delete/上移/下移)、§11.4 混合尺寸
+    提示。
+  - 41 個新單元測試(共 238 個:auto-fill.js 17、pages.js 12、
+    reducers.js 6)+ 瀏覽器實測(Playwright:合成 3 頁混合尺寸 PDF
+    (A4/A3/`/Rotate 90`)+ 1 張合成圖片,透過真實 UI 以
+    `repeatCount=30` 精確重現 §11.1 範例本身的數字——8 頁、最後一頁
+    2 個來源 + 2 個空格;sequential/reverse/odd filter 皆用 4 個相異
+    來源驗證;混合尺寸提示正確顯示;Duplicate/Delete/Move Up 頁面管理
+    皆正確反映在 DOM 與 store 狀態)全數通過,console 無錯誤。
+
 ## Features In Development
-Phase 6(Auto Imposition)尚未開始:Auto Fill、Page Generation、Repeat、
-Reverse、Odd/Even、Empty Slot、混合尺寸處理。
+Phase 7(PDF Export)尚未開始:pdf-lib 輸出、`/Rotate` 正規化、CropBox、
+WEBP 轉碼、資源去重。**這是產品的核心價值與最大技術風險**,§23.3
+Preview/Export 等價性驗證須在此階段建立。
 
 ## Planned Features
-見 `docs/plan.md` §22 開發階段。Phase 6 → Phase 11。
+見 `docs/plan.md` §22 開發階段。Phase 7 → Phase 11。
 
 ## Known Issues
 - plan.md §9.1 的「2+2」preset 未定義其與 2×2 grid(=4up)的幾何差異,
@@ -255,8 +285,12 @@ Model 與 DOM 分離、Slot 與 Source 分離、Preview 與 Export Renderer 分�
 call site,§4.3「唯一 geometry 模組」的契約從「寫好但沒人用」變成「真正
 被用上」;`src/sources.js`/`src/render-adapters.js` 補上 §12.7 中解析度
 Canvas Preview 分層的實際渲染(Phase 2 只立好 `previewCache` 架子)。
-開發期用 `scripts/dev-server.mjs`(http://)跑原生 ESM,`file://` 相容性
-只在 Phase 11 打包產物上驗證。
+Phase 6 的 `src/auto-fill.js`/`src/pages.js` 延續同一種「純函式 +
+reducers.js 接線」分層,`autoFillAction()` 是第一個會一次改動
+`AppState.pages` 陣列本身(而非單一頁面內的 slots)的 reducer,與既有
+`updatePageSlots()` 的操作範疇並列但不重疊。開發期用
+`scripts/dev-server.mjs`(http://)跑原生 ESM,`file://` 相容性只在
+Phase 11 打包產物上驗證。
 
 ## Data Structure
 AppState = Project / Sources / Templates / Pages(→ Slots)/ Selection / History。
@@ -270,6 +304,9 @@ Slot 的新增/移動/縮放/分割/合併/刪除/複製透過 `src/reducers.js`
 creator 經 `store.commit()` 寫入,唯一合法的 mutation 路徑(§7.1)。Slot 的
 內容關聯與 Fit/Scale/Rotation/Offset/Flip 透過 `src/slot-content.js` 的純
 編輯原語、經同一批 `src/reducers.js` action creator 寫入(Phase 5)。
+`AppState.pages` 陣列本身的新增/刪除/複製/重排透過 `src/pages.js` 的純
+原語寫入;Auto Fill(`src/auto-fill.js`)一次性把指定的模板頁替換成多頁,
+兩者皆經 `src/reducers.js` 接上 `store.commit()`(Phase 6)。
 工廠函式見 `src/model.js`,幾何運算見 `src/geometry.js`,狀態管理見
 `src/store.js`,Source Engine 見 `src/sources.js`。詳見 `docs/plan.md` §5–§7、
 §12。

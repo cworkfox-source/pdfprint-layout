@@ -25,6 +25,11 @@ import {
   setSlotOffsetAction,
   setSlotFlipAction,
   clearSlotContentAction,
+  autoFillAction,
+  addPageAction,
+  deletePageAction,
+  duplicatePageAction,
+  movePageAction,
 } from './reducers.js';
 
 function makeTwoPageState() {
@@ -268,4 +273,57 @@ test('Source Placement edits coalesce like Free Layout drags (§7.2) — e.g. an
   assert.equal(store.getState().pages[0].slots[0].offsetX, 0.3);
   store.undo();
   assert.equal(store.getState().pages[0].slots[0].offsetX, 0); // one undo -> all the way back
+});
+
+// --- Auto Imposition actions (§11, Phase 6) --------------------------------
+
+test('autoFillAction replaces the template page with N generated pages, other pages untouched', () => {
+  const store = createStore(makeTwoPageState()); // page-a: 1 slot, page-b: 1 slot
+  const sourceIds = ['s1', 's2', 's3'];
+  store.commit(autoFillAction('page-a', sourceIds, {}), null);
+
+  const pages = store.getState().pages;
+  // page-a (1 slot/page) -> 3 generated pages; page-b is untouched and now 4th
+  assert.equal(pages.length, 4);
+  assert.deepEqual(pages.slice(0, 3).map((p) => p.slots[0].sourceId), ['s1', 's2', 's3']);
+  assert.equal(pages[3].id, 'page-b');
+  assert.equal(pages[3].slots[0].sourceId, null); // untouched
+});
+
+test('autoFillAction applies fillOptions (order/filter/repeat) before generating pages', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(autoFillAction('page-a', ['photo'], { repeatCount: 3 }), null);
+  const pages = store.getState().pages;
+  assert.equal(pages.length, 4); // 3 generated (1 slot/page x 3 repeats) + untouched page-b
+  assert.deepEqual(pages.slice(0, 3).map((p) => p.slots[0].sourceId), ['photo', 'photo', 'photo']);
+});
+
+test('autoFillAction throws for an unknown template pageId', () => {
+  const store = createStore(makeTwoPageState());
+  assert.throws(() => store.commit(autoFillAction('missing', ['a'], {}), null), /No page with id/);
+});
+
+test('addPageAction/deletePageAction/duplicatePageAction/movePageAction operate on AppState.pages', () => {
+  const store = createStore(makeTwoPageState());
+
+  store.commit(addPageAction(createPage({ id: 'page-c' })), null);
+  assert.deepEqual(store.getState().pages.map((p) => p.id), ['page-a', 'page-b', 'page-c']);
+
+  store.commit(duplicatePageAction('page-a'), null);
+  assert.equal(store.getState().pages.length, 4);
+  assert.equal(store.getState().pages[1].slots[0].id !== 'a1', true); // fresh slot id in the clone
+
+  store.commit(movePageAction('page-c', 0), null);
+  assert.equal(store.getState().pages[0].id, 'page-c');
+
+  store.commit(deletePageAction('page-b'), null);
+  assert.ok(!store.getState().pages.some((p) => p.id === 'page-b'));
+});
+
+test('deletePageAction refuses to remove the last remaining page (integration: store state/history untouched)', () => {
+  const page = createPage({ id: 'only' });
+  const store = createStore(createAppState({ pages: [page] }));
+  const before = store.getState();
+  assert.throws(() => store.commit(deletePageAction('only'), null), /last remaining page/);
+  assert.equal(store.getState(), before);
 });

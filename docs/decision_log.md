@@ -774,3 +774,108 @@ B 案是憑空替 plan.md 加需求,且會讓實作與測試複雜度不成比�
 批次操作,回頭重新設計(2)的介面,而不是勉強用現有的單一 `slotId` 函式
 疊加迴圈(疊加迴圈在多選情境下,「上移一層」對每個成員各自處理時,彼此的
 相對順序可能被打亂,需要專門設計)。
+
+## D-014 — Phase 6 Auto Imposition:填版規則語意、Auto Fill 對「模板頁」的取代方式、刪除最後一頁的防護
+
+### Date
+2026-08-05
+
+### Topic
+架構 / 產品範圍
+
+### Context
+實作 Phase 6(plan.md §11 自動填版)時遇到三個缺口:
+
+1. §11.2 原文把「順序填入、逆序填入、僅奇數頁、僅偶數頁、每頁重複、每張
+   重複 N 次」並列書寫,讀起來像六種互斥的填版模式,但唯一的驗收範例
+   (「一張圖片 → 重複 8 次 → 填滿 A4」)只示範了「一個來源重複固定次數」
+   這一種情境,從未示範「每頁重複」單獨是什麼意思、也未說明奇偶篩選是依
+   「來源自己的 PDF 頁碼」還是「使用者選取列表裡的順序」。
+2. §11.1「不足時自動新增 Output Page」沒有說明 Auto Fill 是把目前哪一頁
+   當作「版型模板」,以及執行後那一頁本身變成什麼(被取代?被當成序列
+   第一頁保留?)。
+3. §11.3「刪除頁」與 Phase 4 的「刪除格位」情境類似:若允許刪光所有頁,
+   AppState 會進入沒有任何 Page 可顯示/匯出的狀態,但 §11.3 原文未明訂
+   是否需要「至少保留一頁」的下限。
+
+### Alternatives Considered
+(1) 填版規則語意:
+  A. 把「順序/逆序」「僅奇數/僅偶數」「重複 N 次」視為三個**正交**參數
+     (`order`、`filter`、`repeatCount`),各自獨立設定、疊加生效;
+     filter 依「使用者選取列表裡的 1-based 位置」判斷奇偶(不依賴來源
+     自己的 PDF 頁碼,因為列表可能混合多個檔案或純圖片,圖片沒有
+     pageIndex)。
+  B. 維持六個互斥模式(單選其一),各自獨立實作。
+  C. filter 依來源自己的 `pageIndex`(僅 PDF 有意義,圖片來源需另外
+     決定行為)。
+
+(2) Auto Fill 對模板頁的處理:
+  A. 讀取目前指定頁的 `slots` 版型(忽略其現有內容指派)當「模板」,執行
+     後把該頁在 `AppState.pages` 中的位置,整段替換成新產生的 N 頁。
+  B. 保留模板頁本身不動,產生的新頁全部插入在它後面。
+  C. 要求使用者另外新建一個空白模板頁,Auto Fill 絕不觸碰既有頁面。
+
+(3) 刪除最後一頁:
+  A. `deletePage()` 在只剩 1 頁時 throw,擋下刪除。
+  B. 允許刪光,`AppState.pages` 可以是空陣列。
+
+### Selected Solution
+(1) A。(2) A。(3) A。
+
+### Reason
+(1)A 案是唯一與 §11.2 那個具體範例(單一來源、固定重複次數)完全吻合、
+又不需要無依據地替「每頁重複」單獨發明語意的讀法;B 案得先回答「每頁
+重複」到底是什麼(原文沒給答案,等於是憑空定義);C 案在混合圖片與 PDF
+頁的清單裡沒有一致的「頁碼」可用,必須額外規定圖片的替代行為,增加不必要
+的複雜度,且與「填版對象是使用者挑選的一串來源,不是單一 PDF 檔案」的
+§11.1 描述(「將 Source Gallery 的頁面依序放入 Slot」)更貼近的是列表
+本身的順序,而非個別檔案內部的頁碼。
+(2)A 案讓「先排好一頁喜歡的版面 → Auto Fill 套用到一整批」這個最自然的
+使用情境成立,且直接對應 §11.1 範例的量詞算法(4-up 版型套用在 30 個
+來源上 → 8 頁);B 案會讓「模板頁」本身變成一個內容不明、多出來的頁面,
+使用者需要額外手動清掉;C 案增加一個多餘步驟,且與「不足時自動新增」的
+措辭(暗示是就地擴充,不是另開新頁面)不符。
+(3)A 案與 D-013 處理「刪除最後一個 Slot」時類似情境保持一致的防禦性設計
+(雖然 §11.3 沒有像 §10.3 那樣明講,但一個沒有任何 Page 的 Project 在
+語意上沒有意義——沒有東西可顯示、可匯出);B 案會讓後續 Preview/Export
+的「至少要有一頁可畫」隱性假設在執行期才爆炸,晚於在 `deletePage()` 這裡
+用一個明確錯誤訊息擋下。
+
+### Consequences
+- `src/auto-fill.js`:`applyFillRule(sourceIds, {order, filter,
+  repeatCount})` 純函式,`order` ∈ {sequential, reverse}、`filter` ∈
+  {all, odd, even}(依 1-based 位置、在 order 之後套用)、`repeatCount`
+  為正整數(每個留下的 id 連續重複 N 次)。`generateAutoFillPages()` 把
+  展開後的 id 列表依模板 Slot 數切成多頁,每頁的 Slot 保留模板的全部
+  transform 欄位(fitMode/scale/rotation/offset/flip/z),只換
+  `id`(每頁重新產生)與 `sourceId`;`sourceIds` 為空陣列時仍固定產生
+  **恰好 1 頁**(全部清空),不是 0 頁。`detectMixedSourceSizes()` 供
+  §11.4 UI 提示用,只讀不影響排版(排版本來就已經是逐格用該格自己
+  Source 的尺寸計算 fit,無需額外處理)。
+- `src/reducers.js` 的 `autoFillAction(templatePageId, sourceIds,
+  fillOptions)`:取得指定頁目前的 `slots` 當模板,呼叫
+  `applyFillRule()`+`generateAutoFillPageObjects()`,再用
+  `Array.splice()` 把該頁在 `state.pages` 中的位置整段換成產生的新頁——
+  其餘頁面(在它之前/之後的)完全不受影響。
+- `src/pages.js` 新增 §11.3 的頁面管理原語:`addPage()`/`deletePage()`
+  (只剩 1 頁時 throw)/`duplicatePage()`(連同 Slot 內容一起複製,不同於
+  Template 的 §17.3 規則)/`movePage()`(索引超出範圍時 clamp,不 throw,
+  方便 UI 拖曳重排不必自行夾範圍)。`src/reducers.js` 對應新增
+  `addPageAction`/`deletePageAction`/`duplicatePageAction`/
+  `movePageAction`。
+- `dev/auto-fill.html`(新增,Phase 6 dev harness):Source Gallery(沿用
+  Phase 2/5 的 `sources.js`/`render-adapters.js`)、版型 Preset 下拉、
+  順序/篩選/重複次數控制、Output Pages 面板(每頁縮圖預覽 + Duplicate/
+  Delete/上移/下移)、§11.4 混合尺寸提示。
+- 41 個新單元測試(`auto-fill.js` 17、`pages.js` 12、`reducers.js` 6,
+  共 238 個)+ 瀏覽器實測(Playwright:合成 3 頁混合尺寸 PDF + 1 張
+  合成圖片,實際透過 UI 以 `repeatCount=30` 精確重現 §11.1 範例本身的
+  數字——8 頁、最後一頁 2 個來源 + 2 個空格;sequential/reverse/odd
+  filter 皆用真實 4 個相異來源驗證;混合尺寸提示正確顯示;Duplicate/
+  Delete/Move Up 頁面管理皆正確反映在 DOM 與 store 狀態)全數通過,
+  console 無錯誤。
+
+### Future Review Conditions
+若使用者對「每頁重複」給出與(1)A 不同的明確定義(例如證實它其實是
+獨立於 repeatCount 之外的另一個維度),需要回頭重新設計 `applyFillRule()`
+的參數形狀,而不是勉強塞進現有的三個正交參數。

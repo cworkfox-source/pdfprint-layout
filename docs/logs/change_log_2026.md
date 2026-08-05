@@ -248,3 +248,62 @@ agent 治理規則檔改為只留本機,不再發布到 public GitHub repo。
 PASS — `git log -1` 確認已 push(`801ae4b`);本機 `ls` 確認三檔仍存在於
 工作目錄。
 
+
+## 2026-08-05 17:00
+
+### Type
+Feature
+
+### Summary
+完成 Phase −1 可行性 Spike 並通過(見 plan.md §22 Phase −1、§23.1)。
+`spike/dist/index.html` 在 `file://` 下驗證:ESM 透過 Blob URL 動態載入、
+PDF.js Worker 透過 Blob URL 運作、原始 PDF bytes 未被 PDF.js detach 且可交給
+pdf-lib 匯出。
+
+### Files Changed
+- spike/app.js、spike/template.html、spike/build.py(新增,已 commit)
+- spike/README.md、spike/fetch-vendor.sh(新增,已 commit)
+- vendor/pdfjs/、vendor/pdf-lib/(新增,**不 commit**,由 fetch-vendor.sh 重現)
+- .gitignore(新增 `/vendor/`、`/spike/dist/`)
+
+### Reason
+使用者指示「開始依計畫編寫程式」。plan.md 明訂 Phase −1 未通過不得進入
+Phase 0,故從此處開始,而非直接寫 Data Model。
+
+### Implementation Details
+開發機未安裝 Node.js/npm(`node`/`npm` 均 command not found),無法用 D-004
+指定的 esbuild。改用 `curl` 直接下載 pdf.js v6.2.108 官方 dist(`pdf.mjs`、
+`pdf.worker.mjs`,皆為自足的單檔 ESM,無外部 relative import)與 pdf-lib
+1.17.1 的官方 UMD build,再用一個不需 Node 的 Python 腳本
+(`spike/build.py`)把它們與測試邏輯串接成單一 HTML。
+
+驗證出的關鍵技術手法(供 Phase 0+ 沿用,已寫入 `spike/README.md`):
+1. pdf.js 原始碼整段內嵌為純文字,執行期包 `Blob` → `blob:` URL →
+   `import(blobUrl)` 動態載入,繞過 `<script type="module" src="file:...">`
+   在 Chrome file:// 下的 CORS 阻擋。
+2. `pdf.worker.mjs` 同法包成 `blob:` URL 設給
+   `GlobalWorkerOptions.workerSrc`,`new Worker(url,{type:'module'})` 正常運作。
+3. pdf-lib 用官方 UMD build 直接以 classic `<script>` 內嵌,無 ESM 疑慮。
+4. `file.arrayBuffer()` 後立即 `buffer.slice(0)` 給 PDF.js,原始 buffer 全程
+   保留給 pdf-lib——實測未被 detach,證實 §12.3 規則可行。
+
+### Impact Analysis
+證實產品定位(單檔、離線、`file://` 雙擊執行)技術上可行,可以進入 Phase 0。
+但發現本機開發環境缺 Node.js/npm,是 Phase 11(esbuild 正式 build)前必須解決
+的環境缺口,已記入 decision_log D-008 與 project_status Known Issues。
+另外發現 pdf.js v6 API 變更:`PDFDocumentProxy.destroy()` 已移除,只剩
+`.cleanup()`,完整釋放需呼叫 `loadingTask.destroy()`——初版 spike 程式碼因此
+噴錯,已修正,細節見 `spike/app.js` 註解。
+
+### Verification Result
+PASS — 於 Claude Browser 以 `file://` 開啟 `spike/dist/index.html` 實測(非僅
+程式碼審查):
+1. 頁面載入無 console 錯誤;`window.PDFLib` 與 ESM 動態載入皆成功。
+2. 用 pdf-lib 在頁面內即時產生一份 2 頁測試 PDF(因本沙盒環境無法操作原生
+   檔案選取對話框,改用 `window.__spikeHandleFile()` debug hook 餵入同一條
+   程式路徑,詳見 `spike/app.js` 註解),PDF.js 於 67–114 ms 內 render 出第 1
+   頁,Canvas 像素檢查確認非空白(1579 個非白像素)。
+3. 原始 ArrayBuffer 於 PDF.js 使用後以 `new Uint8Array()` 檢測未被 detach。
+4. 同一份原始 bytes 交給 pdf-lib 成功複製第 1 頁並輸出新 PDF(870 bytes)。
+全數符合 plan.md §23.1 的四項驗收條件。
+
