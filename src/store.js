@@ -46,11 +46,18 @@ export function createStore(initialState) {
       return current;
     }
 
+    // Compute the next state BEFORE touching any history bookkeeping. A
+    // reducer that validates and throws (e.g. free-layout.js's mergeSlots
+    // on a non-rectangular selection, or deleteSlots on a locked slot) must
+    // leave history exactly as it was — otherwise a failed, no-op action
+    // would still push a spurious duplicate onto `past` and clear `future`.
+    const nextState = deepFreeze(reducer(current, action));
+
     past.push(current);
     if (past.length > HISTORY_LIMIT) past.shift();
     future = [];
     pendingCoalesceKey = coalesceKey;
-    current = deepFreeze(reducer(current, action));
+    current = nextState;
     notify();
     return current;
   }

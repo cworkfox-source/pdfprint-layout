@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>Phase 4 dev harness — Free Layout Designer</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 1rem; color: #222; }
+  h1 { font-size: 1.1rem; }
+  .controls { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+  .controls label { display: flex; align-items: center; gap: 4px; font-size: 12px; }
+  button.active { outline: 2px solid #06c; }
+  #viewport { border: 1px solid #ccc; overflow: auto; height: 60vh; padding: 2rem; background: #eee; }
+  #readout { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre; margin-top: 0.5rem; max-height: 180px; overflow: auto; }
+  .pl-paper { margin: 0 auto; }
+  .pl-slot { font: 10px ui-monospace, monospace; color: #900; cursor: move; user-select: none; }
+  .pl-slot.selected { outline: 2px solid #06c !important; background: rgba(0,100,255,0.12) !important; }
+  .pl-slot.locked { cursor: not-allowed; }
+  .rl-handle { position: absolute; width: 10px; height: 10px; background: #06c; border: 1px solid #fff; box-sizing: border-box; z-index: 5; }
+  .rl-create-preview { position: absolute; border: 1px dashed #06c; background: rgba(0,100,255,0.1); pointer-events: none; }
+  #merge-hint { font-size: 12px; color: #b00020; }
+</style>
+</head>
+<body>
+<h1>Phase 4 dev harness — 不是產品 UI，僅供人工／自動化檢查 Free Layout Designer（見 docs/plan.md Phase 4）</h1>
+
+<div class="controls">
+  <button id="mode-select" class="active">Select Mode</button>
+  <button id="mode-create">Create Mode (§9.4 drag to create)</button>
+  <label><input type="checkbox" id="snap-toggle" checked> Snap (§9.5)</label>
+  <span>|</span>
+  <button id="apply-4up">Reset: 4up</button>
+  <span>|</span>
+  <button id="btn-delete">Delete</button>
+  <button id="btn-duplicate">Duplicate</button>
+  <button id="btn-split-h">Split Horizontal (top/bottom)</button>
+  <button id="btn-split-v">Split Vertical (left/right)</button>
+  <button id="btn-merge">Merge</button>
+  <span>|</span>
+  <button id="btn-undo">Undo (Ctrl+Z)</button>
+  <button id="btn-redo">Redo (Ctrl+Y)</button>
+</div>
+<div id="merge-hint"></div>
+
+<div id="viewport"></div>
+<div id="readout"></div>
+
+<script type="module">
+  import { createStore } from '/src/store.js';
+  import { createAppState, createPage, createSlot } from '/src/model.js';
+  import { computePaperPreviewLayout, resolveZoom, renderPaper, renderSlots, computeSlotPx } from '/src/preview.js';
+  import { generatePresetSlots, createSlotsFromRects } from '/src/layout.js';
+  import {
+    canMergeSlots,
+    createSlotRectFromDrag,
+    computeSnapTargetsX,
+    computeSnapTargetsY,
+    computeSnapThresholdNormalized,
+    snapMove,
+    snapResize,
+  } from '/src/free-layout.js';
+  import {
+    setPageSlotsAction,
+    moveSlotsAction,
+    resizeSlotAction,
+    deleteSlotsAction,
+    duplicateSlotsAction,
+    splitSlotHorizontalAction,
+    splitSlotVerticalAction,
+    mergeSlotsAction,
+    setSelectionAction,
+  } from '/src/reducers.js';
+
+  const $ = (id) => document.getElementById(id);
+  const viewport = $('viewport');
+  const PAGE_ID = 'page-1';
+  const SNAP_SCREEN_PX = 6;
+
+  function initialSlots() {
+    const layout = computePaperPreviewLayout({ size: 'A4', orientation: 'portrait', marginTopPt: 28, marginBottomPt: 28, marginLeftPt: 28, marginRightPt: 28, gapHorizontalPt: 0, gapVerticalPt: 0 }, 1);
+    return createSlotsFromRects(generatePresetSlots('4up', { contentAreaWidthPt: layout.contentAreaPt.width, contentAreaHeightPt: layout.contentAreaPt.height, gapHorizontalPt: 10, gapVerticalPt: 10 }));
+  }
+
+  const paper = { size: 'A4', orientation: 'portrait', marginTopPt: 28, marginBottomPt: 28, marginLeftPt: 28, marginRightPt: 28, gapHorizontalPt: 0, gapVerticalPt: 0 };
+  const page = createPage({ id: PAGE_ID, paper, slots: initialSlots() });
+  const store = createStore(createAppState({ pages: [page] }));
+
+  let mode = 'select';
+  let selection = [];
+  let dragState = null;
+  let lastLayout = null;
+
+  function currentSlots() {
+    return store.getState().pages.find((p) => p.id === PAGE_ID).slots;
+  }
+
+  function setMode(next) {
+    mode = next;
+    $('mode-select').classList.toggle('active', mode === 'select');
+    $('mode-create').classList.toggle('active', mode === 'create');
+  }
+
+  function setSelection(ids) {
+    selection = ids;
+    store.commit(setSelectionAction(selection), null, { historyEntry: false });
+    render();
+  }
+
+  function render() {
+    const layout = computePaperPreviewLayout(paper, resolveZoom('fit-page', {
+      containerWidthPx: viewport.clientWidth - 64,
+      containerHeightPx: viewport.clientHeight - 64,
+      paperWidthPt: computePaperPreviewLayout(paper, 1).paperPt.width,
+      paperHeightPt: computePaperPreviewLayout(paper, 1).paperPt.height,
+    }));
+    lastLayout = layout;
+    const paperEl = renderPaper(viewport, layout);
+    const contentEl = paperEl.querySelector(':scope > .pl-content-area');
+    const slots = currentSlots();
+    renderSlots(contentEl, slots, layout.contentAreaPx.width, layout.contentAreaPx.height);
+
+    for (const el of contentEl.querySelectorAll(':scope > .pl-slot')) {
+      const id = el.dataset.slotId;
+      const slot = slots.find((s) => s.id === id);
+      el.textContent = id.slice(-4);
+      el.classList.toggle('selected', selection.includes(id));
+      el.classList.toggle('locked', !!slot.locked);
+    }
+    for (const el of contentEl.querySelectorAll(':scope > .rl-handle')) el.remove();
+
+    if (selection.length === 1) {
+      const slot = slots.find((s) => s.id === selection[0]);
+      if (slot && !slot.locked) {
+        const px = computeSlotPx(slot, layout.contentAreaPx.width, layout.contentAreaPx.height);
+        for (const handle of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']) {
+          const hx = handle.includes('w') ? px.x : handle.includes('e') ? px.x + px.width : px.x + px.width / 2;
+          const hy = handle.includes('n') ? px.y : handle.includes('s') ? px.y + px.height : px.y + px.height / 2;
+          const h = document.createElement('div');
+          h.className = 'rl-handle';
+          h.dataset.handle = handle;
+          h.style.left = `${hx - 5}px`;
+          h.style.top = `${hy - 5}px`;
+          contentEl.appendChild(h);
+        }
+      }
+    }
+
+    const mergeable = selection.length >= 2 && canMergeSlots(slots.filter((s) => selection.includes(s.id)));
+    $('btn-merge').disabled = !mergeable;
+    $('merge-hint').textContent = selection.length >= 2 && !mergeable ? '選取的格位聯集不是矩形，無法合併（§9.3）' : '';
+
+    $('readout').textContent = JSON.stringify({
+      selection,
+      historyDepth: store.historyDepth(),
+      slots: slots.map(({ id, x, y, w, h, locked }) => ({ id, x: +x.toFixed(4), y: +y.toFixed(4), w: +w.toFixed(4), h: +h.toFixed(4), locked })),
+    }, null, 2);
+
+    window.__slots = slots;
+    window.__selection = selection;
+    window.__layout = layout;
+  }
+
+  function handleEdges(handle) {
+    return {
+      x: handle.includes('w') ? 'start' : handle.includes('e') ? 'end' : null,
+      y: handle.includes('n') ? 'start' : handle.includes('s') ? 'end' : null,
+    };
+  }
+
+  function applyHandleDelta(startRect, handle, dx, dy) {
+    let { x, y, w, h } = startRect;
+    if (handle.includes('w')) { x = startRect.x + dx; w = startRect.w - dx; }
+    if (handle.includes('e')) { w = startRect.w + dx; }
+    if (handle.includes('n')) { y = startRect.y + dy; h = startRect.h - dy; }
+    if (handle.includes('s')) { h = startRect.h + dy; }
+    return { x, y, w, h };
+  }
+
+  const contentAreaOf = () => viewport.querySelector('.pl-content-area');
+
+  function normDeltaFromPointer(e, start) {
+    const dxPx = e.clientX - start.clientX;
+    const dyPx = e.clientY - start.clientY;
+    return { dx: dxPx / lastLayout.contentAreaPx.width, dy: dyPx / lastLayout.contentAreaPx.height };
+  }
+
+  function snapEnabled() {
+    return $('snap-toggle').checked;
+  }
+
+  function thresholds() {
+    const zoom = lastLayout.zoom;
+    return {
+      x: computeSnapThresholdNormalized(SNAP_SCREEN_PX, zoom, lastLayout.contentAreaPt.width),
+      y: computeSnapThresholdNormalized(SNAP_SCREEN_PX, zoom, lastLayout.contentAreaPt.height),
+    };
+  }
+
+  viewport.addEventListener('pointerdown', (e) => {
+    const contentEl = contentAreaOf();
+    if (!contentEl) return;
+    const rect = contentEl.getBoundingClientRect();
+    const normX = (e.clientX - rect.left) / rect.width;
+    const normY = (e.clientY - rect.top) / rect.height;
+
+    const handleEl = e.target.closest('.rl-handle');
+    const slotEl = e.target.closest('.pl-slot');
+
+    if (mode === 'create' && !handleEl && !slotEl) {
+      dragState = { type: 'create', startNormX: normX, startNormY: normY };
+      // Capture on `viewport` itself, not `e.target`: `e.target` can be a
+      // `.pl-slot`/`.rl-handle` element that setSelection()'s render() is
+      // about to destroy-and-recreate (e.g. selecting a not-yet-selected
+      // slot), and calling setPointerCapture on an element that's already
+      // been detached throws InvalidStateError. `viewport` is stable for
+      // the whole gesture and already owns these listeners.
+      viewport.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    if (handleEl && selection.length === 1) {
+      const slotId = selection[0];
+      const startRect = currentSlots().find((s) => s.id === slotId);
+      dragState = { type: 'resize', slotId, handle: handleEl.dataset.handle, startRect: { x: startRect.x, y: startRect.y, w: startRect.w, h: startRect.h }, clientX: e.clientX, clientY: e.clientY };
+      // Capture on `viewport` itself, not `e.target`: `e.target` can be a
+      // `.pl-slot`/`.rl-handle` element that setSelection()'s render() is
+      // about to destroy-and-recreate (e.g. selecting a not-yet-selected
+      // slot), and calling setPointerCapture on an element that's already
+      // been detached throws InvalidStateError. `viewport` is stable for
+      // the whole gesture and already owns these listeners.
+      viewport.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    if (slotEl) {
+      const slotId = slotEl.dataset.slotId;
+      if (e.shiftKey) {
+        setSelection(selection.includes(slotId) ? selection.filter((id) => id !== slotId) : [...selection, slotId]);
+      } else if (!selection.includes(slotId)) {
+        setSelection([slotId]);
+      }
+      const slot = currentSlots().find((s) => s.id === slotId);
+      if (!slot.locked && selection.includes(slotId)) {
+        const movingIds = selection.includes(slotId) ? selection : [slotId];
+        const startRects = new Map(currentSlots().filter((s) => movingIds.includes(s.id)).map((s) => [s.id, { x: s.x, y: s.y, w: s.w, h: s.h }]));
+        dragState = { type: 'move', slotIds: movingIds, startRects, clientX: e.clientX, clientY: e.clientY };
+        // Capture on `viewport` itself, not `e.target`: `e.target` can be a
+      // `.pl-slot`/`.rl-handle` element that setSelection()'s render() is
+      // about to destroy-and-recreate (e.g. selecting a not-yet-selected
+      // slot), and calling setPointerCapture on an element that's already
+      // been detached throws InvalidStateError. `viewport` is stable for
+      // the whole gesture and already owns these listeners.
+      viewport.setPointerCapture(e.pointerId);
+      }
+      return;
+    }
+
+    setSelection([]);
+  });
+
+  viewport.addEventListener('pointermove', (e) => {
+    if (!dragState) return;
+    const contentEl = contentAreaOf();
+
+    if (dragState.type === 'create') {
+      const rect = contentEl.getBoundingClientRect();
+      const normX = (e.clientX - rect.left) / rect.width;
+      const normY = (e.clientY - rect.top) / rect.height;
+      let preview = contentEl.querySelector('.rl-create-preview');
+      if (!preview) {
+        preview = document.createElement('div');
+        preview.className = 'rl-create-preview';
+        contentEl.appendChild(preview);
+      }
+      const x = Math.min(dragState.startNormX, normX) * lastLayout.contentAreaPx.width;
+      const y = Math.min(dragState.startNormY, normY) * lastLayout.contentAreaPx.height;
+      const w = Math.abs(normX - dragState.startNormX) * lastLayout.contentAreaPx.width;
+      const h = Math.abs(normY - dragState.startNormY) * lastLayout.contentAreaPx.height;
+      Object.assign(preview.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` });
+      dragState.endNormX = normX;
+      dragState.endNormY = normY;
+      return;
+    }
+
+    if (dragState.type === 'move') {
+      const { dx, dy } = normDeltaFromPointer(e, dragState);
+      if (dragState.slotIds.length === 1 && snapEnabled()) {
+        const slotId = dragState.slotIds[0];
+        const startRect = dragState.startRects.get(slotId);
+        const candidate = { x: startRect.x + dx, y: startRect.y + dy, w: startRect.w, h: startRect.h };
+        const targetsX = computeSnapTargetsX(currentSlots(), { excludeSlotId: slotId });
+        const targetsY = computeSnapTargetsY(currentSlots(), { excludeSlotId: slotId });
+        const th = thresholds();
+        const snapped = snapMove(candidate, targetsX, targetsY, th.x, th.y);
+        store.commit(resizeSlotAction(PAGE_ID, slotId, snapped), null, { coalesceKey: `move:${slotId}` });
+      } else {
+        store.commit(moveSlotsAction(PAGE_ID, dragState.slotIds, dx, dy), null, { coalesceKey: `move:${dragState.slotIds.join(',')}` });
+        // re-baseline so multi-drag deltas apply relative to the ALREADY-moved position next event
+        dragState.clientX = e.clientX;
+        dragState.clientY = e.clientY;
+      }
+      render();
+      return;
+    }
+
+    if (dragState.type === 'resize') {
+      const { dx, dy } = normDeltaFromPointer(e, dragState);
+      let candidate = applyHandleDelta(dragState.startRect, dragState.handle, dx, dy);
+      candidate.w = Math.max(0.02, candidate.w);
+      candidate.h = Math.max(0.02, candidate.h);
+      if (snapEnabled()) {
+        const targetsX = computeSnapTargetsX(currentSlots(), { excludeSlotId: dragState.slotId });
+        const targetsY = computeSnapTargetsY(currentSlots(), { excludeSlotId: dragState.slotId });
+        const th = thresholds();
+        candidate = snapResize(candidate, handleEdges(dragState.handle), targetsX, targetsY, th.x, th.y);
+      }
+      store.commit(resizeSlotAction(PAGE_ID, dragState.slotId, candidate), null, { coalesceKey: `resize:${dragState.slotId}` });
+      render();
+    }
+  });
+
+  viewport.addEventListener('pointerup', () => {
+    if (!dragState) return;
+    if (dragState.type === 'create') {
+      const contentEl = contentAreaOf();
+      const preview = contentEl.querySelector('.rl-create-preview');
+      if (preview) preview.remove();
+      const rect = createSlotRectFromDrag(dragState.startNormX, dragState.startNormY, dragState.endNormX ?? dragState.startNormX, dragState.endNormY ?? dragState.startNormY);
+      if (rect) {
+        const newSlot = createSlot(rect);
+        store.commit(setPageSlotsAction(PAGE_ID, [...currentSlots(), newSlot]), null);
+        setSelection([newSlot.id]);
+      }
+    } else {
+      store.endCoalescing();
+    }
+    dragState = null;
+    render();
+  });
+
+  $('mode-select').addEventListener('click', () => setMode('select'));
+  $('mode-create').addEventListener('click', () => setMode('create'));
+  $('apply-4up').addEventListener('click', () => {
+    store.commit(setPageSlotsAction(PAGE_ID, initialSlots()), null);
+    setSelection([]);
+  });
+  $('btn-delete').addEventListener('click', () => {
+    if (!selection.length) return;
+    store.commit(deleteSlotsAction(PAGE_ID, selection), null);
+    setSelection([]);
+  });
+  $('btn-duplicate').addEventListener('click', () => {
+    if (!selection.length) return;
+    store.commit(duplicateSlotsAction(PAGE_ID, selection), null);
+    render();
+  });
+  $('btn-split-h').addEventListener('click', () => {
+    if (selection.length !== 1) return;
+    store.commit(splitSlotHorizontalAction(PAGE_ID, selection[0]), null);
+    setSelection([]);
+  });
+  $('btn-split-v').addEventListener('click', () => {
+    if (selection.length !== 1) return;
+    store.commit(splitSlotVerticalAction(PAGE_ID, selection[0]), null);
+    setSelection([]);
+  });
+  $('btn-merge').addEventListener('click', () => {
+    if (selection.length < 2) return;
+    store.commit(mergeSlotsAction(PAGE_ID, selection), null);
+    setSelection([]);
+  });
+  $('btn-undo').addEventListener('click', () => { store.undo(); render(); });
+  $('btn-redo').addEventListener('click', () => { store.redo(); render(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (selection.length) { e.preventDefault(); $('btn-delete').click(); }
+    } else if (e.ctrlKey && e.key.toLowerCase() === 'z') {
+      e.preventDefault(); store.undo(); render();
+    } else if (e.ctrlKey && e.key.toLowerCase() === 'y') {
+      e.preventDefault(); store.redo(); render();
+    }
+  });
+
+  window.addEventListener('resize', render);
+  window.__store = store;
+  window.__setSelection = setSelection;
+  window.__setMode = setMode;
+  // Test-only hook (same pattern as spike/app.js's window.__spikeHandleFile):
+  // lets scripted verification load an arbitrary preset/gap combo — e.g. a
+  // gap-less grid to demonstrate §9.3's merge example cleanly, since the
+  // default "Reset: 4up" button intentionally uses a 10pt gap (a more
+  // realistic default) where adjacent cells correctly do NOT form a
+  // mergeable rectangle (there's a real gap between them).
+  window.__loadPreset = (presetId, { gapHorizontalPt = 0, gapVerticalPt = 0 } = {}) => {
+    const layout = computePaperPreviewLayout(paper, 1);
+    const rects = generatePresetSlots(presetId, { contentAreaWidthPt: layout.contentAreaPt.width, contentAreaHeightPt: layout.contentAreaPt.height, gapHorizontalPt, gapVerticalPt });
+    store.commit(setPageSlotsAction(PAGE_ID, createSlotsFromRects(rects)), null);
+    setSelection([]);
+  };
+  render();
+</script>
+</body>
+</html>

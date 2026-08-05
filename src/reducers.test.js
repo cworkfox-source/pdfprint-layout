@@ -1,0 +1,145 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createStore } from './store.js';
+import { createAppState, createPage, createSlot } from './model.js';
+import {
+  setPageSlotsAction,
+  moveSlotsAction,
+  resizeSlotAction,
+  deleteSlotsAction,
+  duplicateSlotsAction,
+  splitSlotHorizontalAction,
+  splitSlotVerticalAction,
+  mergeSlotsAction,
+  setSelectionAction,
+} from './reducers.js';
+
+function makeTwoPageState() {
+  const slotA1 = createSlot({ id: 'a1', x: 0, y: 0, w: 1, h: 1 });
+  const slotB1 = createSlot({ id: 'b1', x: 0.25, y: 0.25, w: 0.5, h: 0.5 });
+  const pageA = createPage({ id: 'page-a', slots: [slotA1] });
+  const pageB = createPage({ id: 'page-b', slots: [slotB1] });
+  return createAppState({ pages: [pageA, pageB] });
+}
+
+test('moveSlotsAction only touches the targeted page', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(moveSlotsAction('page-a', ['a1'], 0.1, 0.1), null);
+
+  const [pageA, pageB] = store.getState().pages;
+  assert.equal(pageA.slots[0].x, 0.1);
+  assert.equal(pageB.slots[0].x, 0.25); // untouched
+});
+
+test('resizeSlotAction updates the rect on the correct page', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(resizeSlotAction('page-b', 'b1', { x: 0, y: 0, w: 1, h: 1 }), null);
+  assert.deepEqual(
+    (({ x, y, w, h }) => ({ x, y, w, h }))(store.getState().pages[1].slots[0]),
+    { x: 0, y: 0, w: 1, h: 1 },
+  );
+});
+
+test('deleteSlotsAction removes the slot from its page', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(deleteSlotsAction('page-a', ['a1']), null);
+  assert.equal(store.getState().pages[0].slots.length, 0);
+});
+
+test('duplicateSlotsAction adds one slot to the target page', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(duplicateSlotsAction('page-b', ['b1']), null);
+  assert.equal(store.getState().pages[1].slots.length, 2);
+});
+
+test('splitSlotHorizontalAction / splitSlotVerticalAction each turn 1 slot into 2', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(splitSlotHorizontalAction('page-a', 'a1'), null);
+  assert.equal(store.getState().pages[0].slots.length, 2);
+
+  const store2 = createStore(makeTwoPageState());
+  store2.commit(splitSlotVerticalAction('page-b', 'b1'), null);
+  assert.equal(store2.getState().pages[1].slots.length, 2);
+});
+
+test('mergeSlotsAction merges two slots on a page back into one', () => {
+  const left = createSlot({ id: 'l', x: 0, y: 0, w: 0.5, h: 1 });
+  const right = createSlot({ id: 'r', x: 0.5, y: 0, w: 0.5, h: 1 });
+  const page = createPage({ id: 'p1', slots: [left, right] });
+  const store = createStore(createAppState({ pages: [page] }));
+
+  store.commit(mergeSlotsAction('p1', ['l', 'r']), null);
+  const slots = store.getState().pages[0].slots;
+  assert.equal(slots.length, 1);
+  assert.deepEqual({ x: slots[0].x, y: slots[0].y, w: slots[0].w, h: slots[0].h }, { x: 0, y: 0, w: 1, h: 1 });
+});
+
+test('mergeSlotsAction on a non-rectangular selection throws AND leaves store state/history untouched (§23.4.2, integration with the store.js fix)', () => {
+  const a = createSlot({ id: 'a', x: 0, y: 0, w: 0.5, h: 0.5 });
+  const b = createSlot({ id: 'b', x: 0.5, y: 0, w: 0.5, h: 0.5 });
+  const c = createSlot({ id: 'c', x: 0, y: 0.5, w: 0.5, h: 0.5 }); // L-shape with a,b
+  const page = createPage({ id: 'p1', slots: [a, b, c] });
+  const store = createStore(createAppState({ pages: [page] }));
+  const before = store.getState();
+  const depthBefore = store.historyDepth();
+
+  assert.throws(() => store.commit(mergeSlotsAction('p1', ['a', 'b', 'c']), null), /do not form a rectangle/);
+
+  assert.equal(store.getState(), before); // exact same frozen object, nothing replaced
+  assert.deepEqual(store.historyDepth(), depthBefore);
+  assert.equal(store.getState().pages[0].slots.length, 3);
+});
+
+test('setSelectionAction bypasses undo history when committed with historyEntry:false (§7.3)', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(moveSlotsAction('page-a', ['a1'], 0.1, 0), null);
+  store.commit(setSelectionAction(['a1']), null, { historyEntry: false });
+
+  assert.deepEqual(store.getState().selection, ['a1']);
+  store.undo();
+  // Undo skips the selection change (never entered history) and reverts
+  // straight past it to the pre-move position.
+  assert.equal(store.getState().pages[0].slots[0].x, 0);
+});
+
+test('setPageSlotsAction replaces the whole slot list (§9.3/§9.4 apply-preset / commit-drag-created-slot use case)', () => {
+  const store = createStore(makeTwoPageState());
+  const newSlots = [createSlot({ x: 0, y: 0, w: 0.5, h: 1 }), createSlot({ x: 0.5, y: 0, w: 0.5, h: 1 })];
+  store.commit(setPageSlotsAction('page-a', newSlots), null);
+  assert.equal(store.getState().pages[0].slots.length, 2);
+});
+
+test('drag-style coalescing collapses a whole move gesture into one undo step (§7.2)', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(moveSlotsAction('page-a', ['a1'], 0.01, 0), null, { coalesceKey: 'drag:a1' });
+  store.commit(moveSlotsAction('page-a', ['a1'], 0.01, 0), null, { coalesceKey: 'drag:a1' });
+  store.commit(moveSlotsAction('page-a', ['a1'], 0.01, 0), null, { coalesceKey: 'drag:a1' });
+
+  assert.ok(Math.abs(store.getState().pages[0].slots[0].x - 0.03) < 1e-9);
+  store.undo();
+  assert.equal(store.getState().pages[0].slots[0].x, 0); // one undo -> all the way back to pre-drag
+});
+
+test('full split -> merge -> undo x2 round-trip restores the original single slot', () => {
+  const original = createSlot({ id: 'orig', x: 0, y: 0, w: 1, h: 1 });
+  const page = createPage({ id: 'p1', slots: [original] });
+  const store = createStore(createAppState({ pages: [page] }));
+
+  store.commit(splitSlotHorizontalAction('p1', 'orig', 0.5), null);
+  const [top, bottom] = store.getState().pages[0].slots;
+  assert.equal(store.getState().pages[0].slots.length, 2);
+
+  store.commit(mergeSlotsAction('p1', [top.id, bottom.id]), null);
+  assert.equal(store.getState().pages[0].slots.length, 1);
+
+  store.undo(); // back to split (2 slots)
+  assert.equal(store.getState().pages[0].slots.length, 2);
+  store.undo(); // back to original (1 slot)
+  assert.equal(store.getState().pages[0].slots.length, 1);
+  assert.equal(store.getState().pages[0].slots[0].id, 'orig');
+});
+
+test('an unknown pageId throws instead of silently doing nothing', () => {
+  const store = createStore(makeTwoPageState());
+  assert.throws(() => store.commit(moveSlotsAction('does-not-exist', ['a1'], 0.1, 0), null), /No page with id/);
+});

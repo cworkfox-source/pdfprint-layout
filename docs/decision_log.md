@@ -444,3 +444,99 @@ bug 而非刻意設計)。
 ### Future Review Conditions
 使用者對「2+2」給出明確定義,或對非對稱 preset 的列/欄高度分配規則有不同
 要求(例如改成可調整比例)時重新檢視。
+
+## D-011 — Phase 4 Free Layout Designer:分割方向命名、鎖定 Slot 的操作邊界、Snap 衝突時的選取策略,以及 store.js 一個既有 bug 的修正
+
+### Date
+2026-08-05
+
+### Topic
+架構 / 資料模型 / 程式碼修正
+
+### Context
+實作 Phase 4(plan.md §9.3-§9.5)時遇到三個 plan.md 缺口,以及在把
+free-layout.js 接上 `store.js` 時發現一個既有實作缺陷:
+1. §9.3「水平分割、垂直分割」沒有圖示,無法確定「水平分割」是切出上下兩塊
+   還是左右兩塊。
+2. §10.3 規定鎖定的 Slot「不得 Move / Resize / Delete」,但沒說多選中混雜
+   鎖定與未鎖定 Slot 時,Move 操作該整體失敗還是只動未鎖定的部分。
+3. §9.5 的吸附系統列出多種吸附目標(紙張邊界/中心、其他 Slot 邊與中線),
+   但沒規定同一次拖曳中,如果 Slot 的起始邊、結束邊、中心線同時有各自的
+   候選吸附目標時該吸附哪一個。
+4. 撰寫 `free-layout.js` 的 reducer(`mergeSlots`/`deleteSlots`/
+   `splitSlot*` 對非法操作會 throw)並接上 `store.commit()` 後,寫
+   reducers.test.js 的整合測試時發現:`store.js` 的 `commit()` 在呼叫
+   reducer **之前**就先把目前狀態 push 進 `past`、清空 `future`,若
+   reducer 隨後 throw(例如合併非矩形選取),`past` 會留下一筆多餘的重複
+   記錄、`future` 被錯誤清空——即使這次操作實際上完全失敗、狀態毫無變化。
+   Phase 0-3 從未讓 reducer 會 throw,所以這個缺陷一直沒被觸發過。
+
+### Alternatives Considered
+(1) 分割方向命名:
+  A. 依常見編輯器慣例(Word/Excel「分割儲存格」):分割線的方向決定名稱
+     ——「水平分割」畫一條水平線,產生上下兩塊。
+  B. 反過來:「水平分割」產生左右並排的兩塊(以最終排列方向命名)。
+  C. 不用「水平/垂直」,改用「上下分割/左右分割」等無歧義字眼(但這樣
+     偏離 plan.md 原文用字)。
+
+(2) 鎖定 Slot 的多選操作邊界:
+  A. Move:靜默略過選取中鎖定的成員(其餘正常移動);Resize/Delete/
+     Split/Merge:只要目標包含鎖定 Slot 就整個操作失敗並 throw。
+  B. 所有操作(含 Move)一律整個失敗並 throw。
+  C. 所有操作都靜默略過鎖定成員,從不 throw。
+
+(3) Snap 衝突時的選取策略:
+  A. 同時比較「起始邊、結束邊、中心線」三個候選對齊目標,取需要調整量
+     最小的那個。
+  B. 固定優先序(例如永遠優先吸附起始邊)。
+  C. 只吸附使用者當下實際拖曳的那個邊,不考慮中心線。
+
+(4) store.js 的 history bug:
+  A. 修正 `commit()`,先算出 reducer 的結果,成功後才動 `past`/`future`/
+     `pendingCoalesceKey`。
+  B. 保持現狀,要求所有 reducer 都不得 throw(把驗證邏輯挪到呼叫端)。
+
+### Selected Solution
+(1) A。(2) A。(3) A。(4) A。
+
+### Reason
+(1)A 案是最直觀、最少意外的讀法,且此慣例在中文輔助軟體 UI 也常見。
+已在 `free-layout.js` 加註解明確記錄此假設,而非默默照字面猜測。
+(2)A 案讓「拖曳整批選取」在混有鎖定項目時仍然有用(未鎖定的照常移動),
+但更「重」的操作(刪除、分割、合併——這些通常是使用者主動、單一目標的
+動作,誤觸的代價更高)則直接擋下並給明確錯誤,呼應 §10.3「避免誤操作」
+的精神;B 案會讓「拖曳一批含鎖定項目的選取」完全動不了,體驗不佳;C 案
+讓鎖定形同虛設,刪除/分割/合併鎖定 Slot 不會有任何警示。
+(3)A 案讓吸附結果永遠是「視覺上調整幅度最小」的那個,符合使用者對吸附
+的直覺預期(輕微超出目標時,吸附行為應該像「磁鐵」抓住最近的線,而不是
+固定抓某一邊);B/C 案在 Slot 尺寸接近吸附間距時容易吸到使用者沒有預期
+的邊。
+(4)A 案是純粹的正確性修正,成本極低(重新排列兩行程式碼的執行順序),
+且直接對應 Phase 4 才第一次出現的「reducer 需要能安全地拒絕非法操作」
+需求;B 案會讓 Phase 4 起「驗證失敗時 throw」這個現有測試驗證過的模式
+整個不能用,且驗證邏輯本來就該和它要保護的資料放在一起(reducer 內),
+不該搬到每個呼叫端各自重複檢查。
+
+### Consequences
+- `src/free-layout.js`:`moveSlots()` 靜默略過鎖定 Slot;
+  `setSlotRect()`/`deleteSlots()`/`splitSlotHorizontal()`/
+  `splitSlotVertical()`/`mergeSlots()` 對鎖定目標一律 throw
+  `Cannot ... a locked slot (§10.3)`。
+- `src/free-layout.js`:`snapMoveAxis()` 同時試算起始邊/結束邊/中心線
+  三個候選,取 `Math.abs(delta)` 最小者;`snapResizeAxis()`/`snapResize()`
+  則只吸附呼叫端明確指定的那條邊(對應「使用者正在拖曳哪個 handle」,
+  不需要在多個候選間取捨)。
+- `src/store.js` `commit()`:改為先呼叫 `reducer(current, action)` 算出
+  `nextState`,成功後才 `past.push(current)`/清空 `future`/更新
+  `pendingCoalesceKey`,最後才寫入 `current`。新增 regression test
+  (`store.test.js`:「a throwing reducer leaves history completely
+  untouched」)與整合測試(`reducers.test.js`:merge 非矩形選取失敗後
+  `store.getState()` 與 `historyDepth()` 完全不變,含物件參照相等)。
+- `docs/plan.md` §9.1 已補充非對稱 preset 的等分假設(D-010),本次不再
+  重複修改;分割方向的假設只記在程式碼註解與本決議,因 §9.3 原文本身
+  未提供足夠細節可供精確改寫。
+
+### Future Review Conditions
+使用者對「水平/垂直分割」的實際方向有不同預期時(例如透過操作實測發現
+與直覺不符)重新檢視;§9.5 加入參考線/Grid 吸附(Guides 資料模型)時,
+需要決定它們與既有「起始邊/結束邊/中心線」候選集合的優先序如何合併。

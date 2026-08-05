@@ -2,14 +2,16 @@
 
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
 Visual Page Imposition Designer,public repo
-https://github.com/cworkfox-source/pdfprint-layout。**Phase 0、Phase 1、
-Phase 2、Phase 3 已完成**(geometry/store/model + paper/margin/zoom/
-print-CSS + PDF/圖片 Source Engine + Layout Engine preset/自訂 Grid,
-112 個單元測試 + 瀏覽器實測皆通過)。下一步:Phase 4 Free Layout Designer
-(新增/移動/縮放/分割/合併 Slot、Snap、Z-order)。無 blocker。
+https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-4 已完成**
+(geometry/store/model + paper/margin/zoom/print-CSS + PDF/圖片 Source
+Engine + Layout Engine preset/自訂 Grid + Free Layout Designer 含
+Undo/Redo,156 個單元測試 + 瀏覽器實測皆通過)。下一步:Phase 5 Source
+Placement(拖曳放置、Fit/Fill/Stretch、Rotation、Scale、Offset、Flip)。
+無 blocker。
 
 ## Current Version
-Plan v2.1(§5.2 補 docId 欄位)/ Phase 3 完成(無產品 UI,僅引擎與 dev 檢查頁)
+Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 4 完成
+(無產品 UI,僅引擎與 dev 檢查頁)
 
 ## Project Goals
 純前端、零後端、可離線、可打包為單一 HTML 的視覺化拼版工具。使用者載入 PDF 或
@@ -107,12 +109,47 @@ Plan v2.1(§5.2 補 docId 欄位)/ Phase 3 完成(無產品 UI,僅引擎與 dev 
     套用 4-up,數值符合手算公式)全數通過,細節見 change_log
     2026-08-05 20:15。
 
+- Phase 4 Free Layout Designer(2026-08-05):
+  - `src/free-layout.js` — 純 `Slot[]` 編輯原語(無 DOM、不 import
+    store.js):`moveSlots()`(鎖定成員靜默略過)、`setSlotRect()`/
+    `deleteSlots()`/`splitSlotHorizontal()`/`splitSlotVertical()`/
+    `mergeSlots()`(對鎖定目標一律 throw,§10.3);`canMergeSlots()` 以
+    「無重疊 + 聯集面積等於外框面積」判斷 §9.3 的矩形規則;
+    `createSlotRectFromDrag()` 供 §9.4 自由拖曳建立格位;Snap 系統
+    (`computeSnapTargetsX/Y`、`computeSnapThresholdNormalized`(6 螢幕
+    px,與 zoom 無關)、`snapMove`/`snapResize`,同時比較起始邊/結束邊/
+    中心線取調整量最小者)。分割方向命名假設(水平分割→上下、垂直分割→
+    左右)見 decision_log D-011。
+  - `src/reducers.js` — 把 free-layout.js 接上 `store.commit()` 的
+    AppState action creator(`moveSlotsAction`/`resizeSlotAction`/
+    `deleteSlotsAction`/`duplicateSlotsAction`/`splitSlot*Action`/
+    `mergeSlotsAction`/`setSelectionAction`),這是 Phase 0 的 `store.js`
+    第一次被實際的編輯操作使用(Phase 1-3 的 dev harness 都繞過它)。
+  - **修正 `src/store.js` 的既有 bug**:`commit()` 原本在呼叫 reducer
+    **之前**就把狀態 push 進 `past`,若 reducer 中途 throw(例如合併非
+    矩形選取),會留下一筆多餘的 history 記錄且錯誤清空 `future`。改為
+    先算出 reducer 結果,成功後才動 history 記帳。第一次寫會 throw 的
+    reducer(Phase 4 之前 History 從未被 Phase 0-3 的程式碼真正驗證過這
+    條路徑)才發現,細節見 decision_log D-011。
+  - `dev/free-layout.html` — Phase 4 互動式 dev harness:Select/Create
+    模式切換、點選/Shift 點選多選、拖曳移動與 8 個縮放 handle(皆支援
+    Snap 開關)、Delete/Duplicate/Split H/Split V/Merge(不可合併時停用
+    並顯示提示)、Undo/Redo 按鈕與 Ctrl+Z/Ctrl+Y。
+  - 44 個新單元測試(共 156 個:free-layout.js 31、reducers.js 12、
+    store.js regression 1)+ 瀏覽器實測(Playwright 模擬真實
+    pointer 拖曳:無 Snap 時移動/縮放的像素位移與模型變化量精確吻合;
+    有 Snap 時吸附行為符合「調整量最小的邊獲勝」設計;分割/合併/刪除/
+    複製/Undo/Redo/拖曳建立格位全數驗證通過)全數通過,過程中順帶修正
+    dev harness 自身一個 `setPointerCapture` 在元素被重新渲染後呼叫導致
+    `InvalidStateError` 的問題(改成在穩定的容器元素上 capture),細節見
+    change_log 2026-08-05 21:40。
+
 ## Features In Development
-Phase 4(Free Layout Designer)尚未開始:新增/移動/縮放/分割/合併/刪除/
-複製 Slot、對齊、Snap、Z-order 操作。
+Phase 5(Source Placement)尚未開始:拖曳放置、Fit/Fill/Stretch、
+Rotation、Scale、Offset、Flip、Clip。
 
 ## Planned Features
-見 `docs/plan.md` §22 開發階段。Phase 4 → Phase 11。
+見 `docs/plan.md` §22 開發階段。Phase 5 → Phase 11。
 
 ## Known Issues
 - plan.md §9.1 的「2+2」preset 未定義其與 2×2 grid(=4up)的幾何差異,
@@ -126,6 +163,10 @@ Phase 4(Free Layout Designer)尚未開始:新增/移動/縮放/分割/合併/刪
 - pdf.js v6(現行最新版)API 變更:`PDFDocumentProxy.destroy()` 已移除,改用
   `.cleanup()` 或 `loadingTask.destroy()`。`src/sources.js` 已採用新 API
   (`loadingTask.destroy()`),勿參考含 `pdfDoc.destroy()` 的舊教學。
+- §9.3「水平/垂直分割」的方向命名、鎖定 Slot 混合選取時 Move 與其他操作的
+  邊界、Snap 衝突時的取捨策略,plan.md 皆未明確定義,Phase 4 已依常見編輯
+  器慣例自行決定並記錄假設,見 decision_log D-011。已修正 `store.js` 的
+  history bug(reducer throw 時不得留下 history 記錄),見同一決議。
 
 ## Technical Architecture
 Vanilla HTML5 + ES6+,PDF.js 負責解析與預覽,pdf-lib 負責輸出,esbuild 打包成
@@ -135,8 +176,12 @@ Model 與 DOM 分離、Slot 與 Source 分離、Preview 與 Export Renderer 分�
 `src/geometry.js`;`src/preview.js` 是第一個實際的 Preview Renderer,
 `src/render-adapters.js` 是 Source Engine 的 DOM/PDF.js adapter,兩者都依此
 原則把計算與 DOM/第三方庫寫入分開,讓 `src/sources.js` 的 orchestration 邏輯
-可在純 Node 測試。開發期用 `scripts/dev-server.mjs`(http://)跑原生 ESM,
-`file://` 相容性只在 Phase 11 打包產物上驗證。
+可在純 Node 測試。`src/free-layout.js` 同樣是純 Slot 編輯邏輯、不碰 DOM,
+`src/reducers.js` 是它與 `store.js` 之間唯一的接線層——Phase 4 是 `store.js`
+(Phase 0 完成)第一次被真正的編輯操作使用,過程中也修正了它一個既有 bug
+(reducer throw 時history 記帳未回滾,見 decision_log D-011)。開發期用
+`scripts/dev-server.mjs`(http://)跑原生 ESM,`file://` 相容性只在 Phase 11
+打包產物上驗證。
 
 ## Data Structure
 AppState = Project / Sources / Templates / Pages(→ Slots)/ Selection / History。
@@ -145,6 +190,8 @@ Slot 採 normalized 座標(相對內容區 0..1),內部長度單位一律 pt。
 已實作;不得被 PDF.js detach,plan §12.3),依 `docId` 保存、與 AppState 完全
 分離,不進 store.js 的 undo history。Source 的 `docId` 欄位是兩者之間的唯一
 連結(同一 PDF 檔案的所有頁 Source 共用一個 docId,見 decision_log D-009)。
+Slot 的新增/移動/縮放/分割/合併/刪除/複製透過 `src/reducers.js` 的 action
+creator 經 `store.commit()` 寫入,唯一合法的 mutation 路徑(§7.1)。
 工廠函式見 `src/model.js`,幾何運算見 `src/geometry.js`,狀態管理見
 `src/store.js`,Source Engine 見 `src/sources.js`。詳見 `docs/plan.md` §5–§7、
 §12。

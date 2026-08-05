@@ -127,3 +127,22 @@ test('increment reducer composes correctly across multiple commits', () => {
   store.commit(increment(), null);
   assert.equal(store.getState().count, 3);
 });
+
+test('a throwing reducer leaves history completely untouched (regression: validating reducers, Phase 4)', () => {
+  const store = createStore({ count: 0 });
+  store.commit(setCount(1), null);
+  store.commit(setCount(2), null);
+  const { past: pastBefore, future: futureBefore } = store.historyDepth();
+
+  const throwingReducer = () => {
+    throw new Error('validation failed');
+  };
+  assert.throws(() => store.commit(throwingReducer, null), /validation failed/);
+
+  // state, history depth, and undo/redo stacks must be exactly as before
+  // the failed commit attempt — not a spurious extra `past` entry.
+  assert.equal(store.getState().count, 2);
+  assert.deepEqual(store.historyDepth(), { past: pastBefore, future: futureBefore });
+  store.undo();
+  assert.equal(store.getState().count, 1); // one real undo step, not two
+});
