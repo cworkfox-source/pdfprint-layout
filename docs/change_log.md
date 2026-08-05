@@ -209,4 +209,8 @@ Docs
 或機敏內容(已依 Boundaries「不得印出/寫入金鑰密碼個資」檢查)。
 
 ### Verification Result
-待補(將於 push 完成後以實際 commit hash 與 repo URL 更新本欄)
+PASS — repo 建立於 https://github.com/cworkfox-source/pdfprint-layout
+(public),root commit `8fbf7bb0`。commit 作者身分原被自動猜成
+`unknown <BASS000025@tccg.gov.tw>`(政府網域,不宜公開),經使用者確認後改為
+GitHub noreply 位址 `256346730+cworkfox-source@users.noreply.github.com`
+再 push,未推送任何含真實 email 的歷史。

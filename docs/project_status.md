@@ -2,10 +2,10 @@
 
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
 本 repo 已由「AI 治理範本」轉為產品 repo:Visual Page Imposition Designer。
-`docs/plan.md` v2.0 為需求來源,`docs/spec.md` 已重寫,Scale 已改為 solo-large。
-無關的 Python 打包 playbook 已刪除;尚無任何程式碼。下一步:Phase −1 可行性
-Spike(file:// + Blob Worker + pdf-lib),未通過前不得進入 Phase 0。
-待決:GitHub 發布 + 應用內自動更新需求與現有「離線/禁止發布」規則衝突,待使用者裁決。
+`docs/plan.md` v2.1、`docs/spec.md` 已重寫,Scale 為 solo-large。已推送至
+public repo https://github.com/cworkfox-source/pdfprint-layout(僅文件,無
+程式碼)。下一步:Phase −1 可行性 Spike(file:// + Blob Worker + pdf-lib),
+未通過前不得進入 Phase 0。無 blocker。
 
 ## Current Version
 Plan v2.0 / 尚未有程式碼版本
@@ -52,8 +52,10 @@ Slot 採 normalized 座標(相對內容區 0..1),內部長度單位一律 pt。
 N/A — 純前端,無後端 API。
 
 ## Deployment Process
-Phase 11 產出單一 `index.html`,使用者雙擊即可在 Chrome / Edge 開啟使用。
-不得依賴 CDN / Server / Internet。
+原始碼與文件託管於 https://github.com/cworkfox-source/pdfprint-layout
+(public)。Phase 11 產出單一 `index.html`,經 GitHub Release 發布,使用者
+雙擊即可在 Chrome / Edge 開啟使用;應用程式本身除 §19.4 手動更新檢查外
+不得依賴 CDN / Server / Internet。發布流程見 plan.md §19.5。
 
 ## Dependencies
 PDF.js、pdf-lib、esbuild(build 期)。不引入前端 Framework 與 SortableJS。
