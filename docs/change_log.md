@@ -303,3 +303,71 @@ PASS — 於 Claude Browser 以 `file://` 開啟 `spike/dist/index.html` 實測(
 3. 原始 ArrayBuffer 於 PDF.js 使用後以 `new Uint8Array()` 檢測未被 detach。
 4. 同一份原始 bytes 交給 pdf-lib 成功複製第 1 頁並輸出新 PDF(870 bytes)。
 全數符合 plan.md §23.1 的四項驗收條件。
+
+## 2026-08-05 17:40
+
+### Type
+Feature
+
+### Summary
+確認開發機已裝好 Node.js v24.19.0 / npm 11.17.0(先前 Known Issue 解除),
+完成 Phase 0 Data Model 核心:`src/geometry.js`(唯一幾何模組)、
+`src/store.js`(單一 mutation 入口)、`src/model.js`(§5 資料結構),
+39 個單元測試全數通過。
+
+### Files Changed
+- package.json(新增,零 runtime 依賴,`npm test` = `node --test`)
+- src/geometry.js、src/geometry.test.js(新增)
+- src/store.js、src/store.test.js(新增)
+- src/model.js、src/model.test.js(新增)
+- docs/plan.md — §6.3 fitScale 公式修正(見 Implementation Details)
+- AGENTS.md — Project Facts 的 Build/Test/Dev server 改為真實指令,
+  Key directories 加入 `src/`
+- docs/project_status.md — TL;DR、Completed/In Development、移除已解決的
+  Node.js Known Issue
+
+### Reason
+使用者確認「Node.js已安裝 繼續執行計畫」。plan.md Phase 0 規則要求先有
+Data Model 才能進 Phase 1,且 geometry.js/store.js 是明訂「不能後補」的
+架構地基(plan §4),故從此處開始寫程式碼,而非直接做 UI。
+
+### Implementation Details
+**geometry.js** 依 plan §6 逐項實作:mm/pt 換算、A4/A3/Letter/Legal 精確 pt
+值、2D 仿射矩陣工具(與 Canvas2D `transform(a,b,c,d,e,f)` 同慣例,方便未來
+Preview Renderer 直接使用)、§6.3 Slot transform matrix、§6.2 唯一的 PDF Y
+軸翻轉函式、§14.3 `/Rotate` 正規化、§13.5/§14.4 CropBox 優先、§6.5 z-order
+排序。
+
+**寫測試時發現並修正一個公式落差**:原 plan.md §6.3 的 `fitScale` 公式在
+`rotation` 為 90°/270° 時未考慮內容局部座標軸被旋轉到 Slot 的另一軸上,若
+不對調比較用的 Slot 目標尺寸,非正方形 Slot 配合 90°/270° 旋轉時 contain/
+cover/stretch 會算錯。已在 `computeFitScale()` 修正(180° 不受影響,因為外框
+方向不變),並回寫 plan.md §6.3 文字說明。此修正在單元測試階段被抓到——先寫
+了一個依直覺（未對調）手算的測試,執行後與程式碼實際輸出不符,逐步排查後
+確認公式本身有落差而非程式碼錯誤,才回頭修正 plan.md。
+
+**store.js** 依 plan §7 實作:`commit(reducer, action, options)` 為唯一
+mutation 入口,reducer 須為純函式;history 用 immutable snapshot(上限 50,
+超過丟最舊)搭配 `coalesceKey` 合併連續操作(例如拖曳中每個 pointermove)為
+一個 undo 步驟,`endCoalescing()` 結束合併;`historyEntry:false` 供
+Zoom/Pan/Selection 不進 history;每次 commit 後對整個 state tree 做
+`Object.freeze`,外部繞過 reducer 直接改物件會直接噴錯而非靜默損壞資料。
+
+**model.js** 依 plan §5 提供 Source/Slot/Page/Template/Project/AppState 的
+工廠函式,欄位與預設值逐一對照 plan.md §5.2–§5.4;`createTemplate()` 會自動
+清除傳入 Slot 的 `sourceId`,對應 §21「Template 不保存 Source」的硬性規則,
+而不是靠使用者自律。
+
+### Impact Analysis
+Phase 0 的三項不可後補規則(§4.1 Layout Model 與 DOM 分離、§7.1 單一
+mutation 入口、§4.3 唯一 geometry 模組)現在有實際程式碼與測試支撐,不再只是
+文件承諾。Phase 11 的 Node.js 環境缺口已解除,decision_log D-008 的
+「Phase 11 前需解決」條件達成,但本次仍未安裝 esbuild/pdfjs-dist/pdf-lib
+(Phase 0 用不到,留到實際需要的 Phase 才加,避免預先綁定用不到的依賴)。
+
+### Verification Result
+PASS — `npm test` 39/39 通過(geometry 18、store 9、model 12)。測試內容
+非泛用斷言,包含依 plan.md 手算的具體數值案例(如 §23.2 的 A4/A3 精確 pt
+值、slot matrix 具體座標映射、history coalescing 行為),過程中這些手算
+測試也確實抓出了一次 fitScale 公式落差(見上)。尚未做瀏覽器端整合測試,
+因 Phase 0 範圍不含 DOM/Canvas。

@@ -2,13 +2,13 @@
 
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
 Visual Page Imposition Designer,public repo
-https://github.com/cworkfox-source/pdfprint-layout。**Phase −1 可行性 Spike
-已通過**(`spike/`,見 change_log 2026-08-05 17:00)。下一步:Phase 0 Data
-Model(geometry.js / store.js,見 plan.md §5–§7)。已知缺口:開發機無
-Node.js/npm,Phase 11(esbuild build)前必須解決,見 Known Issues。
+https://github.com/cworkfox-source/pdfprint-layout。Phase −1 Spike 已通過。
+**Phase 0 進行中**:`src/geometry.js`(唯一幾何模組)、`src/store.js`(單一
+mutation 入口)、`src/model.js`(§5 資料結構)已完成並通過 39 個單元測試
+(`npm test`)。Node.js 已裝好,見 Project Facts。下一步:Phase 1 Paper & Preview Engine。
 
 ## Current Version
-Plan v2.0 / 尚未有程式碼版本
+Plan v2.1 / Phase 0 進行中(無 UI,僅資料模型)
 
 ## Project Goals
 純前端、零後端、可離線、可打包為單一 HTML 的視覺化拼版工具。使用者載入 PDF 或
@@ -29,18 +29,28 @@ Plan v2.0 / 尚未有程式碼版本
   下驗證通過 pdf.js ESM 透過 Blob URL 動態載入、Worker 透過 Blob URL 運作、
   原始 PDF bytes 未被 detach 且可交給 pdf-lib 匯出。技術手法見
   `spike/README.md`。
+- Phase 0 資料模型核心(2026-08-05):
+  - `src/geometry.js` — mm/pt 換算、A4/A3/Letter/Legal 精確 pt 值、2D 仿射
+    矩陣工具、§6.3 Slot transform matrix(含旋轉 90/270 時 fit 目標尺寸對調
+    的修正,已回寫 plan.md §6.3)、§6.2 PDF Y 軸翻轉(唯一一處)、§14.3
+    `/Rotate` 正規化、§13.5/§14.4 CropBox 優先、§6.5 z-order 排序。
+  - `src/store.js` — 單一 mutation 入口(`commit`)、immutable snapshot
+    history(上限 50)、coalescing(拖曳合併為一步 undo)、
+    `historyEntry:false`(Zoom/Pan/Selection 不進 history)、狀態 deep
+    freeze 防止繞過 reducer 直接改物件。
+  - `src/model.js` — Project/Source/Page/Slot/Template/AppState 工廠函式,
+    Template 建立時自動去除 `sourceId`(§21 Template 不存 Source)。
+  - 39 個單元測試全數通過(`npm test`,零 npm 依賴,純 Node 內建
+    `node:test`)。
 
 ## Features In Development
-Phase 0(Data Model):`geometry.js`(§6 唯一幾何模組)、`store.js`(§7 單一
-mutation 入口)、Project/Source/Page/Slot/Transform/Template 資料結構。
+Phase 0 收尾:尚未寫 `Project`/`AppState` 的完整驗證與 JSON round-trip;
+Phase 1(Paper & Preview Engine)尚未開始,需要瀏覽器互動,屆時才要 Dev server。
 
 ## Planned Features
-見 `docs/plan.md` §22 開發階段。Phase 0 → Phase 11。
+見 `docs/plan.md` §22 開發階段。Phase 1 → Phase 11。
 
 ## Known Issues
-- **開發機未安裝 Node.js/npm**(`node`/`npm` command not found)。Phase 0–10
-  不受影響(spike 用 Python 腳本 + 手動 vendor 繞過);但 Phase 11 的正式
-  build 依 decision_log D-004 指定用 esbuild,需要 Node,屆時必須先安裝。
 - pdf.js v6(現行最新版)API 變更:`PDFDocumentProxy.destroy()` 已移除,改用
   `.cleanup()` 或 `loadingTask.destroy()`。Phase 2 Source Engine 實作時需
   採用新 API,勿參考含 `pdfDoc.destroy()` 的舊教學。
@@ -54,8 +64,9 @@ Slot 與 Source 分離、Preview 與 Export Renderer 分離但幾何等價。
 ## Data Structure
 AppState = Project / Sources / Templates / Pages(→ Slots)/ Selection / History。
 Slot 採 normalized 座標(相對內容區 0..1),內部長度單位一律 pt。
-原始檔案 bytes 存於獨立的 SourceBinaryStore(不得被 PDF.js detach,plan §12.3)。
-詳見 `docs/plan.md` §5–§7。
+原始檔案 bytes 存於獨立的 SourceBinaryStore(尚未實作,Phase 2 才需要;不得被
+PDF.js detach,plan §12.3)。工廠函式見 `src/model.js`,幾何運算見
+`src/geometry.js`,狀態管理見 `src/store.js`。詳見 `docs/plan.md` §5–§7。
 
 ## API Structure
 N/A — 純前端,無後端 API。

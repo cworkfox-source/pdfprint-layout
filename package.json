@@ -1,0 +1,11 @@
+{
+  "name": "pdfprint-layout",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Visual Page Imposition Designer — offline-first HTML/PDF/image imposition & print tool",
+  "scripts": {
+    "test": "node --test src/**/*.test.js"
+  },
+  "devDependencies": {}
+}

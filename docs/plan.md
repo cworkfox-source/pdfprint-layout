@@ -253,10 +253,16 @@ M = T(slotOrigin)
   · T(-contentW/2, -contentH/2)
 ```
 
-- `fitScale` 由 `fitMode` 決定：
-  - `contain` → `min(slotW/cw, slotH/ch)`
-  - `cover` → `max(slotW/cw, slotH/ch)`
-  - `stretch` → X 與 Y 各自獨立縮放（此時 `fitScale` 為非等向，`S` 退化為 `S(sx, sy)`）
+- `fitScale` 由 `fitMode` 決定，**且 `rotation` 為 90°/270° 時，用來比較的 Slot
+  目標尺寸要對調**（因為 `S` 是套用在內容自身未旋轉的局部座標上、在 `R` 之前，
+  90°/270° 旋轉後內容的局部 x/y 軸會對調到 Slot 的 y/x 軸；180° 不改變外框方向
+  故不對調）：
+  - 令 `targetW = (rotation ∈ {90,270}) ? slotH : slotW`，
+    `targetH = (rotation ∈ {90,270}) ? slotW : slotH`
+  - `contain` → `min(targetW/cw, targetH/ch)`
+  - `cover` → `max(targetW/cw, targetH/ch)`
+  - `stretch` → `sx = targetW/cw, sy = targetH/ch`（非等向，`S` 退化為 `S(sx, sy)`）
+  - 實作與此對應的測試見 `src/geometry.js` 的 `computeFitScale()`。
 - 旋轉中心固定為 **Slot 中心**，非內容中心、非左上角。
 - `flip` 在 `scale` 之後、`rotation` 之前套用（等同對內容自身鏡射，不影響 Slot 位置）。
 - **來源頁 `/Rotate` 不屬於此矩陣**，須先正規化（見 §14.3）。
