@@ -2,34 +2,6 @@
 
 > Older entries: docs/logs/ (archive, do not load at startup)
 
-## 2026-07-06 00:00
-
-### Type
-Docs
-
-### Summary
-Initialized governance docs (project_status / change_log / decision_log) from
-`docs/templates.md`, and filled the "Project Facts" section of `AGENTS.md`.
-
-### Files Changed
-- docs/project_status.md (created)
-- docs/change_log.md (created)
-- docs/decision_log.md (created)
-- AGENTS.md (Project Facts filled)
-
-### Reason
-AGENTS.md Bootstrap / Startup procedure requires these files; they were missing.
-
-### Implementation Details
-Created from the templates in `docs/templates.md`, content derived from the
-actual repo contents (docs-only template repo, no build/test commands).
-
-### Impact Analysis
-Documentation only; no behavior change.
-
-### Verification Result
-PASS
-
 ## 2026-07-06 00:10
 
 ### Type
@@ -371,3 +343,70 @@ PASS — `npm test` 39/39 通過(geometry 18、store 9、model 12)。測試內�
 值、slot matrix 具體座標映射、history coalescing 行為),過程中這些手算
 測試也確實抓出了一次 fitScale 公式落差(見上)。尚未做瀏覽器端整合測試,
 因 Phase 0 範圍不含 DOM/Canvas。
+
+## 2026-08-05 18:15
+
+### Type
+Feature
+
+### Summary
+完成 Phase 1 Paper & Preview Engine:`src/preview.js`(paper/margin/zoom
+純計算 + 薄 DOM adapter)、`scripts/dev-server.mjs`(零依賴靜態伺服器,開發期
+用 http:// 跑原生 ESM,見 plan §19.2)、`dev/index.html` 人工檢查頁,並在真實
+瀏覽器(非僅 code review)以 Claude Browser 實測驗證。
+
+### Files Changed
+- src/preview.js、src/preview.test.js(新增)
+- scripts/dev-server.mjs(新增)
+- dev/index.html(新增,Phase 1 專用檢查頁,非產品 UI)
+- .claude/launch.json(新增,供 preview_start 啟動 dev server)
+
+### Reason
+延續 Phase 0 完成後的下一步(plan.md §22 開發優先順序:Paper Engine 在
+Data Model 之後)。Phase 1 是第一個需要 DOM/Canvas 的階段,依操作規範
+「UI/前端變更需啟動 dev server 並在瀏覽器中實測」,不能只靠 `npm test`。
+
+### Implementation Details
+`preview.js` 的數學與 DOM 操作分離(§4.1 原則的具體實踐):
+`computePaperPreviewLayout()`/`resolveZoom()`/`computeContentAreaPt()` 全部
+不碰 DOM,`renderPaper()`/`applyPrintPageSize()` 只負責把算好的數字寫進
+DOM/CSS,不含任何計算邏輯。Preview 內部約定「zoom=1 時 1pt=1 CSS px」,此
+約定只影響 Preview 顯示,不影響已用 pt 儲存的 Model,因此 Zoom 改變不會讓
+`paperPt`/`contentAreaPt` 變動(對應 §23.2.4 的「Zoom 不影響輸出」)。
+`applyPrintPageSize()` 是 `@page size` 唯一寫入點,pt→mm 換算只在此發生。
+
+開發環境問題:`file://` 下原生 ESM 會被擋(plan §19.2),但那是 Phase 11
+「打包成單檔」才要解決的問題;開發期本來就規劃可用 dev server(§19.1
+「開發期可用 dev server 跑 ESM」),故寫了一個不依賴任何套件的靜態檔案
+伺服器,單純把 repo 用 http:// 服務出來,原生 `<script type="module">`
+即可正常運作,不需要重複 spike 階段的 Blob URL workaround。
+
+### Impact Analysis
+Phase 1 的三項驗收(A4 Canvas 比例正確、方向切換正常、mm 計算正確)現在有
+純函式版本(12 個新單元測試)與瀏覽器內實測雙重驗證。§23.2.4「Zoom 不影響
+輸出」的前提(pt 與 px 分離)已在程式碼與測試中落實,為 Phase 7 Export 對接
+鋪路。
+
+### Verification Result
+PASS — 兩層驗證:
+1. `npm test`:51/51 通過(新增 12 個 preview.js 測試)。
+2. 瀏覽器實測(`node scripts/dev-server.mjs` + Claude Browser 開啟
+   `http://localhost:5173`,console 無錯誤):
+   - A4 portrait zoom=100%:`paperPt` = `{595.276, 841.89}`,DOM 實際
+     `getBoundingClientRect()` = `595.27 × 841.88`(次像素誤差 < 0.02px,
+     瀏覽器 layout 四捨五入所致)。
+   - 切換 Landscape:`paperPt` 正確變為 `{841.89, 595.276}`,DOM 同步跟上。
+   - Zoom 200%:`paperPx` 精確變為兩倍(`1683.78 × 1190.552`),但
+     `paperPt` 完全不變 —— 證實 Zoom 與 Export 用的 pt 值互不影響。
+   - `applyPrintPageSize()` 產生的 `@page` 內容隨方向正確切換
+     (`210mm × 297mm` ↔ `297mm × 210mm`)。
+   - Fit Page 依容器實際尺寸算出非整數 zoom(0.475),使用容器當下
+     `clientWidth/Height` 為準,行為符合預期(觀察到一個純 DOM 現象:
+     捲軸出現/消失會讓 `clientWidth` 在計算前後不同,這是瀏覽器 layout
+     的正常行為,不是 `resolveZoom()` 的邏輯問題,函式本身以顯式傳入的
+     容器尺寸為準,已由純函式測試鎖定)。
+   - 邊界案例:margin 設為超過紙張一半寬度,`computeContentAreaPt()`
+     正確拋出「Margins leave zero or negative content area」,未靜默
+     產生錯誤版面。
+
+## 2026-08-05 | Docs | Rotated 1 entry (2026-07-06 00:00) to docs/logs/change_log_2026.md | wc -l verified (410 lines active; "newest 10" policy kept us just over 400 — worth revisiting the threshold once solo-large entries stay this long)

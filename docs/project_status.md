@@ -2,13 +2,13 @@
 
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
 Visual Page Imposition Designer,public repo
-https://github.com/cworkfox-source/pdfprint-layout。Phase −1 Spike 已通過。
-**Phase 0 進行中**:`src/geometry.js`(唯一幾何模組)、`src/store.js`(單一
-mutation 入口)、`src/model.js`(§5 資料結構)已完成並通過 39 個單元測試
-(`npm test`)。Node.js 已裝好,見 Project Facts。下一步:Phase 1 Paper & Preview Engine。
+https://github.com/cworkfox-source/pdfprint-layout。**Phase 0、Phase 1 已
+完成**(geometry/store/model + paper/margin/zoom/print-CSS,51 個單元測試 +
+瀏覽器實測皆通過)。下一步:Phase 2 Source Engine(PDF.js 載入、Thumbnail
+Gallery、§12.3 bytes 保留規則)。無 blocker。
 
 ## Current Version
-Plan v2.1 / Phase 0 進行中(無 UI,僅資料模型)
+Plan v2.1 / Phase 1 完成(無產品 UI,僅引擎與 dev 檢查頁)
 
 ## Project Goals
 純前端、零後端、可離線、可打包為單一 HTML 的視覺化拼版工具。使用者載入 PDF 或
@@ -42,13 +42,24 @@ Plan v2.1 / Phase 0 進行中(無 UI,僅資料模型)
     Template 建立時自動去除 `sourceId`(§21 Template 不存 Source)。
   - 39 個單元測試全數通過(`npm test`,零 npm 依賴,純 Node 內建
     `node:test`)。
+- Phase 1 Paper & Preview Engine(2026-08-05):
+  - `src/preview.js` — 純計算(`computePaperPreviewLayout`/`resolveZoom`/
+    `computeContentAreaPt`)與 DOM adapter(`renderPaper`/
+    `applyPrintPageSize`)分離;Preview 內部「zoom=1 時 1pt=1px」的換算
+    與 Model 的 pt 儲存互不影響。
+  - `scripts/dev-server.mjs` — 零依賴靜態伺服器,開發期以 http:// 跑原生
+    ESM(file:// 的限制只在 Phase 11 打包時才需處理,見 plan §19.2)。
+  - `dev/index.html` — Phase 1 人工檢查頁(非產品 UI)。
+  - 12 個新單元測試(共 51 個)+ 瀏覽器實測(A4/A3、方向切換、Zoom
+    100%→200%、Fit Page、`@page` CSS、超額 margin 報錯)全數通過,細節見
+    change_log 2026-08-05 18:15。
 
 ## Features In Development
-Phase 0 收尾:尚未寫 `Project`/`AppState` 的完整驗證與 JSON round-trip;
-Phase 1(Paper & Preview Engine)尚未開始,需要瀏覽器互動,屆時才要 Dev server。
+Phase 2(Source Engine)尚未開始:PDF.js 載入、Thumbnail Gallery、
+`SourceBinaryStore`(§12.3 bytes 保留規則)、§12.5 快取門檻。
 
 ## Planned Features
-見 `docs/plan.md` §22 開發階段。Phase 1 → Phase 11。
+見 `docs/plan.md` §22 開發階段。Phase 2 → Phase 11。
 
 ## Known Issues
 - pdf.js v6(現行最新版)API 變更:`PDFDocumentProxy.destroy()` 已移除,改用
@@ -57,9 +68,12 @@ Phase 1(Paper & Preview Engine)尚未開始,需要瀏覽器互動,屆時才要 D
 
 ## Technical Architecture
 Vanilla HTML5 + ES6+,PDF.js 負責解析與預覽,pdf-lib 負責輸出,esbuild 打包成
-單一 IIFE HTML。三條不可違反的分離原則(plan §4):Layout Model 與 DOM 分離、
-Slot 與 Source 分離、Preview 與 Export Renderer 分離但幾何等價。
-所有單位換算、Y 軸翻轉、fit 與 transform 疊加集中於唯一的 `geometry.js`。
+單一 IIFE HTML(僅 Phase 11)。三條不可違反的分離原則(plan §4):Layout
+Model 與 DOM 分離、Slot 與 Source 分離、Preview 與 Export Renderer 分離但
+幾何等價。所有單位換算、Y 軸翻轉、fit 與 transform 疊加集中於唯一的
+`src/geometry.js`;`src/preview.js` 是第一個實際的 Preview Renderer,已依此
+原則把計算與 DOM 寫入分開。開發期用 `scripts/dev-server.mjs`(http://)跑
+原生 ESM,`file://` 相容性只在 Phase 11 打包產物上驗證。
 
 ## Data Structure
 AppState = Project / Sources / Templates / Pages(→ Slots)/ Selection / History。

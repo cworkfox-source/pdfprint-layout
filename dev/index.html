@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>Phase 1 dev harness — Paper &amp; Preview Engine</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 1rem; color: #222; }
+  h1 { font-size: 1.1rem; }
+  .controls { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+  .controls label { display: flex; flex-direction: column; font-size: 12px; gap: 2px; }
+  #viewport { border: 1px solid #ccc; overflow: auto; height: 70vh; padding: 2rem; background: #eee; }
+  #readout { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre; margin-top: 0.5rem; }
+  .pl-paper { margin: 0 auto; }
+</style>
+</head>
+<body>
+<h1>Phase 1 dev harness — 不是產品 UI，僅供人工／自動化檢查 Paper &amp; Preview Engine（見 docs/plan.md Phase 1）</h1>
+
+<div class="controls">
+  <label>Paper
+    <select id="paper-size">
+      <option>A4</option>
+      <option>A3</option>
+      <option>Letter</option>
+      <option>Legal</option>
+    </select>
+  </label>
+  <label>Orientation
+    <select id="orientation">
+      <option value="portrait">Portrait</option>
+      <option value="landscape">Landscape</option>
+    </select>
+  </label>
+  <label>Margin (pt, all sides)
+    <input id="margin" type="number" value="28" min="0">
+  </label>
+  <label>Zoom
+    <select id="zoom">
+      <option value="25%">25%</option>
+      <option value="50%">50%</option>
+      <option value="75%">75%</option>
+      <option value="100%" selected>100%</option>
+      <option value="150%">150%</option>
+      <option value="200%">200%</option>
+      <option value="fit-page">Fit Page</option>
+      <option value="fit-width">Fit Width</option>
+    </select>
+  </label>
+</div>
+
+<div id="viewport"></div>
+<div id="readout"></div>
+
+<script type="module">
+  import { createPaperSettings } from '/src/model.js';
+  import { computePaperPreviewLayout, resolveZoom, renderPaper, applyPrintPageSize } from '/src/preview.js';
+
+  const $ = (id) => document.getElementById(id);
+  const viewport = $('viewport');
+
+  function currentPaper() {
+    return createPaperSettings({
+      size: $('paper-size').value,
+      orientation: $('orientation').value,
+      marginTopPt: Number($('margin').value),
+      marginBottomPt: Number($('margin').value),
+      marginLeftPt: Number($('margin').value),
+      marginRightPt: Number($('margin').value),
+    });
+  }
+
+  function update() {
+    const paper = currentPaper();
+    const zoomInput = $('zoom').value;
+    // resolveZoom's fit-page/fit-width need the paper's real pt size, which
+    // only computePaperPreviewLayout knows how to resolve (custom size,
+    // orientation swap, etc.) — ask it at zoom 1 first, purely to read
+    // paperPt back out.
+    const unzoomed = computePaperPreviewLayout(paper, 1);
+    const zoom = resolveZoom(zoomInput, {
+      containerWidthPx: viewport.clientWidth - 64,
+      containerHeightPx: viewport.clientHeight - 64,
+      paperWidthPt: unzoomed.paperPt.width,
+      paperHeightPt: unzoomed.paperPt.height,
+    });
+    const layout = computePaperPreviewLayout(paper, zoom);
+    renderPaper(viewport, layout);
+    applyPrintPageSize(layout.paperPt.width, layout.paperPt.height);
+
+    $('readout').textContent = JSON.stringify(layout, null, 2);
+    window.__lastLayout = layout;
+  }
+
+  for (const id of ['paper-size', 'orientation', 'margin', 'zoom']) {
+    $(id).addEventListener('change', update);
+  }
+  window.addEventListener('resize', update);
+  update();
+  window.__update = update;
+</script>
+</body>
+</html>
