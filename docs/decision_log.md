@@ -260,3 +260,48 @@ C 會讓「零背景網路請求」的承諾失真,且與 §20 隱私聲明衝�
 
 ### Future Review Conditions
 若使用者之後想要真正的自動安裝(選項 D),需重新評估是否放棄純前端單檔定位。
+
+## D-008 — Phase −1 Spike 確認可行,但改用手動 vendor 而非 esbuild(環境缺 Node)
+
+### Date
+2026-08-05
+
+### Topic
+架構驗證 / 開發工具鏈
+
+### Context
+使用者指示開始寫程式,依 plan.md 規則須先跑 Phase −1 Spike。動手時發現開發機
+未安裝 Node.js/npm(`node`/`npm` 皆 command not found,`where.exe node` 也找不
+到),而 D-004 指定的正式打包工具 esbuild 需要 Node。Spike 本身的目的只是驗證
+`file://` 下 ESM/Worker/detach 三個問題,不必等 Node 裝好才能驗證。
+
+### Alternatives Considered
+A. 停下來,請使用者先安裝 Node.js,才能繼續。
+B. Spike 階段改用 `curl` 直接下載 pdf.js / pdf-lib 官方預建產物,搭配一個不需
+   Node 的 Python 腳本(`spike/build.py`)串接成單一 HTML,先驗證可行性;
+   Node 缺口留到 Phase 11(真正需要 esbuild 的階段)再處理。
+C. 放棄 esbuild,整個專案改用其他不需 Node 的打包方式。
+
+### Selected Solution
+B。
+
+### Reason
+A 會讓 Phase −1 這個「純粹回答可不可行」的問題被不相關的環境安裝工作卡住;
+Phase 0～10 的開發也不需要 bundler(單一 HTML 組裝到 Phase 11 才需要)。C 尚無
+證據顯示 esbuild 選擇有問題,不必现在推翻 D-004。B 用最小成本(下載 3 個官方
+建置產物 + 一支 Python 腳本)拿到 Phase −1 的答案,且驗證出的技術手法(Blob URL
+dynamic import / Blob URL module Worker)與正式 esbuild 產物的行為一致,不會
+因為換了組裝方式而讓驗證結果失效。
+
+### Consequences
+- `spike/` 下新增 `app.js`、`template.html`、`build.py`、`fetch-vendor.sh`、
+  `README.md`(皆 commit);`vendor/` 與 `spike/dist/` 不 commit(改 gitignore,
+  可用 `fetch-vendor.sh` 重現,含版本與 checksum)。
+- **Phase 11 開始前必須解決 Node.js 缺口**(安裝 Node,或改用其他方式取得
+  esbuild),已記入 project_status.md Known Issues。Phase 0～10 不受影響。
+- 過程中發現 pdf.js v6 API 變更(`PDFDocumentProxy.destroy()` 移除,改用
+  `loadingTask.destroy()`),已在 spike 程式碼修正並加註解,Phase 2 Source
+  Engine 實作時需採用同一 API。
+
+### Future Review Conditions
+Phase 11 開始前,或使用者決定要在此開發機安裝 Node.js 時重新檢視。

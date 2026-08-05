@@ -1,11 +1,11 @@
 # Project Overview
 
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
-本 repo 已由「AI 治理範本」轉為產品 repo:Visual Page Imposition Designer。
-`docs/plan.md` v2.1、`docs/spec.md` 已重寫,Scale 為 solo-large。已推送至
-public repo https://github.com/cworkfox-source/pdfprint-layout(僅文件,無
-程式碼)。下一步:Phase −1 可行性 Spike(file:// + Blob Worker + pdf-lib),
-未通過前不得進入 Phase 0。無 blocker。
+Visual Page Imposition Designer,public repo
+https://github.com/cworkfox-source/pdfprint-layout。**Phase −1 可行性 Spike
+已通過**(`spike/`,見 change_log 2026-08-05 17:00)。下一步:Phase 0 Data
+Model(geometry.js / store.js,見 plan.md §5–§7)。已知缺口:開發機無
+Node.js/npm,Phase 11(esbuild build)前必須解決,見 Known Issues。
 
 ## Current Version
 Plan v2.0 / 尚未有程式碼版本
@@ -25,16 +25,25 @@ Plan v2.0 / 尚未有程式碼版本
 - 專案 / 版型儲存與載入、Undo / Redo
 
 ## Completed Features
-(none — 尚未開始實作)
+- Phase −1 可行性 Spike(2026-08-05):`spike/dist/index.html` 於 `file://`
+  下驗證通過 pdf.js ESM 透過 Blob URL 動態載入、Worker 透過 Blob URL 運作、
+  原始 PDF bytes 未被 detach 且可交給 pdf-lib 匯出。技術手法見
+  `spike/README.md`。
 
 ## Features In Development
-(none)
+Phase 0(Data Model):`geometry.js`(§6 唯一幾何模組)、`store.js`(§7 單一
+mutation 入口)、Project/Source/Page/Slot/Transform/Template 資料結構。
 
 ## Planned Features
-見 `docs/plan.md` §22 開發階段。Phase −1 → Phase 11。
+見 `docs/plan.md` §22 開發階段。Phase 0 → Phase 11。
 
 ## Known Issues
-(尚無實作,無 issue)
+- **開發機未安裝 Node.js/npm**(`node`/`npm` command not found)。Phase 0–10
+  不受影響(spike 用 Python 腳本 + 手動 vendor 繞過);但 Phase 11 的正式
+  build 依 decision_log D-004 指定用 esbuild,需要 Node,屆時必須先安裝。
+- pdf.js v6(現行最新版)API 變更:`PDFDocumentProxy.destroy()` 已移除,改用
+  `.cleanup()` 或 `loadingTask.destroy()`。Phase 2 Source Engine 實作時需
+  採用新 API,勿參考含 `pdfDoc.destroy()` 的舊教學。
 
 ## Technical Architecture
 Vanilla HTML5 + ES6+,PDF.js 負責解析與預覽,pdf-lib 負責輸出,esbuild 打包成

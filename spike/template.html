@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>pdfprint-layout — Phase -1 Feasibility Spike</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+  h1 { font-size: 1.2rem; }
+  #status { font-weight: bold; padding: 0.5rem; border-radius: 4px; background: #eee; }
+  #status.pass { background: #d4f7d4; }
+  #status.fail { background: #f7d4d4; }
+  #log { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; margin-top: 1rem; border: 1px solid #ccc; padding: 0.5rem; max-height: 300px; overflow: auto; }
+  #log .pass { color: #0a0; }
+  #log .fail { color: #c00; font-weight: bold; }
+  #log .info { color: #555; }
+  canvas { max-width: 100%; border: 1px solid #ccc; margin-top: 1rem; }
+  #download-link { display: none; margin-top: 1rem; }
+</style>
+</head>
+<body>
+<h1>pdfprint-layout — Phase −1 可行性 Spike</h1>
+<p>驗證 <code>docs/plan.md</code> §23.1 的三項條件：ESM 在 <code>file://</code> 下透過 Blob URL 載入、
+PDF.js Worker 透過 Blob URL 運作、原始 bytes 未被 PDF.js detach 而可交給 pdf-lib 匯出。</p>
+<p><input type="file" id="file-input" accept="application/pdf"></p>
+<div id="status">尚未開始</div>
+<canvas id="preview"></canvas>
+<a id="download-link" href="#"></a>
+<div id="log"></div>
+
+<script>/* pdf-lib UMD build — classic script, no ESM needed */
+__PDFLIB_SOURCE__
+</script>
+
+<script type="module">
+const PDFJS_SOURCE = __PDFJS_SOURCE_JSON__;
+const PDFJS_WORKER_SOURCE = __PDFJS_WORKER_SOURCE_JSON__;
+__APP_SOURCE__
+</script>
+</body>
+</html>

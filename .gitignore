@@ -4,6 +4,11 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Vendored third-party builds fetched by spike/fetch-vendor.sh — reproducible
+# from pinned URLs + checksums in spike/README.md, not committed (large text).
+/vendor/
+/spike/dist/
+
 # AI agent governance rule files — kept locally, not published (user request 2026-08-05)
 /AGENTS.md
 /CLAUDE.md
