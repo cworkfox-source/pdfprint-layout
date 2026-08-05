@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>Phase 8 dev harness — Print Path</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 1rem; color: #222; }
+  h1 { font-size: 1.1rem; }
+  .layout { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
+  .controls { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
+  .controls label { display: flex; flex-direction: column; font-size: 12px; gap: 2px; }
+  #gallery { display: flex; flex-direction: column; gap: 8px; border: 1px solid #ccc; padding: 8px; min-height: 100px; background: #fafafa; width: 160px; }
+  .tile { border: 1px solid #ddd; background: #fff; padding: 4px; font-size: 10px; word-break: break-all; }
+  .tile img { width: 100%; height: 50px; object-fit: contain; background: #eee; display: block; }
+  .tile .placeholder { width: 100%; height: 50px; background: #eee; display: flex; align-items: center; justify-content: center; color: #999; font-size: 9px; }
+  #pages { display: flex; flex-direction: column; gap: 12px; max-height: 60vh; overflow: auto; padding: 8px; background: #eee; border: 1px solid #ccc; width: 260px; }
+  .page-card { background: #fff; border: 1px solid #ccc; padding: 6px; }
+  .pl-slot { font-size: 8px; color: #900; overflow: hidden; }
+  #verify { display: flex; flex-direction: column; gap: 12px; flex: 1; min-width: 260px; }
+  .verify-page { border: 1px solid #0a7d28; background: #fff; padding: 6px; }
+  .verify-page canvas { display: block; max-width: 100%; }
+  #log { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; margin-top: 1rem; border-top: 1px solid #ccc; padding-top: 0.5rem; max-height: 200px; overflow: auto; }
+  #readout { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre; margin-top: 0.5rem; max-height: 160px; overflow: auto; }
+  .pass { color: #0a7d28; }
+  .fail { color: #b00020; }
+  fieldset { border: 1px solid #ccc; margin: 0; }
+  legend { font-size: 12px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Phase 8 dev harness — 不是產品 UI，僅供人工／自動化檢查 Print Path（見 docs/plan.md Phase 8 / §15 / §16）</h1>
+
+<div class="controls">
+  <label>PDF / Image 檔案
+    <input id="file-input" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,image/*,application/pdf">
+  </label>
+  <button id="run-auto-fill">Auto Fill 4-up（用目前所有來源快速建立版面)</button>
+</div>
+
+<fieldset class="controls">
+  <legend>Crop Marks（§16）</legend>
+  <label><input id="crop-marks-enabled" type="checkbox"> 啟用</label>
+  <label>長度 mm <input id="crop-marks-length" type="number" value="5" step="0.5" style="width:4em"></label>
+  <label>間距 mm <input id="crop-marks-gap" type="number" value="3" step="0.5" style="width:4em"></label>
+  <label>線寬 pt <input id="crop-marks-linewidth" type="number" value="0.5" step="0.1" style="width:4em"></label>
+  <button id="apply-crop-marks">套用</button>
+</fieldset>
+
+<div class="controls">
+  <button id="export-pdf">Export PDF</button>
+  <button id="print-btn">Print（§15.1 — 與 Export 走完全同一條路徑，再以瀏覽器內建 PDF Viewer 開啟）</button>
+  <button id="calibration-btn">Print Calibration Page（§15.3 — 獨立於 Project 的 100mm 測試框）</button>
+  <a id="download-link" style="display:none" download="export.pdf">下載匯出的 PDF</a>
+</div>
+
+<div class="layout">
+  <div id="gallery"></div>
+  <div id="pages"></div>
+  <div id="verify">
+    <div>Export/Print 驗證(重新載入輸出的 PDF,以真實 pdf.js re-render 確認視覺正確):</div>
+  </div>
+</div>
+
+<div id="readout"></div>
+<div id="log"></div>
+
+<script type="module">
+  import * as pdfjsLib from '/vendor/pdfjs/pdf.mjs';
+  import * as PDFLib from '/vendor/pdf-lib/pdf-lib.esm.js';
+  import { createStore } from '/src/store.js';
+  import { createAppState, createPage } from '/src/model.js';
+  import { mmToPt } from '/src/geometry.js';
+  import { computePaperPreviewLayout, resolveZoom, renderPaper, renderSlots, renderSlotContent, renderCropMarks, computeSlotPx, PX_PER_PT_AT_ZOOM_1 } from '/src/preview.js';
+  import { generatePresetSlots, createSlotsFromRects } from '/src/layout.js';
+  import { autoFillAction, addSourceAction, setCropMarksAction } from '/src/reducers.js';
+  import { createSourceEngine } from '/src/sources.js';
+  import { renderPdfPageThumbnail, decodeImage, renderImageThumbnail, renderPdfPagePreview, renderImagePreview } from '/src/render-adapters.js';
+  import { transcodeWebpToPng, openPdfBytesForPrint } from '/src/export-adapters.js';
+  import { createBinaryStore } from '/src/binary-store.js';
+  import { exportProjectToPdf } from '/src/export.js';
+  import { exportCalibrationPagePdf } from '/src/print.js';
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.mjs';
+
+  const $ = (id) => document.getElementById(id);
+  const gallery = $('gallery');
+  const pagesEl = $('pages');
+  const verifyEl = $('verify');
+  const logEl = $('log');
+  const PAGE_ID = 'page-1';
+
+  const log = (msg, ok) => {
+    const line = document.createElement('div');
+    line.className = ok === undefined ? '' : (ok ? 'pass' : 'fail');
+    line.textContent = `${ok === undefined ? '·' : (ok ? '[PASS]' : '[FAIL]')} ${msg}`;
+    logEl.appendChild(line);
+    console.log(msg);
+  };
+
+  const binaryStore = createBinaryStore();
+  const sources = new Map();
+  const engine = createSourceEngine({
+    binaryStore,
+    renderPdfPageThumbnail,
+    decodeImage,
+    renderImageThumbnail,
+    renderPdfPagePreview,
+    renderImagePreview,
+    onThumbnailReady: (sourceId) => {
+      const img = document.querySelector(`.tile[data-source-id="${sourceId}"] img`);
+      const placeholder = document.querySelector(`.tile[data-source-id="${sourceId}"] .placeholder`);
+      const thumb = engine.getThumbnail(sourceId);
+      if (img && thumb) { img.src = thumb.url; img.style.display = ''; if (placeholder) placeholder.style.display = 'none'; }
+      render();
+    },
+    onThumbnailError: (sourceId, err) => log(`縮圖失敗 ${sourceId}: ${err.message}`, false),
+  });
+
+  const paper = { size: 'A4', orientation: 'portrait', marginTopPt: 28, marginBottomPt: 28, marginLeftPt: 28, marginRightPt: 28, gapHorizontalPt: 8, gapVerticalPt: 8 };
+  function presetSlots(presetId) {
+    const layout = computePaperPreviewLayout(paper, 1);
+    const rects = generatePresetSlots(presetId, {
+      contentAreaWidthPt: layout.contentAreaPt.width, contentAreaHeightPt: layout.contentAreaPt.height,
+      gapHorizontalPt: paper.gapHorizontalPt, gapVerticalPt: paper.gapVerticalPt,
+    });
+    return createSlotsFromRects(rects);
+  }
+  const store = createStore(createAppState({ pages: [createPage({ id: PAGE_ID, paper, slots: presetSlots('4up') })] }));
+
+  const requestedPreviews = new Set();
+  function resolveContent(sourceId) {
+    if (!sourceId) return null;
+    return engine.getPreview(sourceId) ?? engine.getThumbnail(sourceId) ?? null;
+  }
+  function ensurePreviewsForVisibleSources() {
+    for (const page of store.getState().pages) {
+      for (const slot of page.slots) {
+        if (slot.sourceId && !requestedPreviews.has(slot.sourceId)) {
+          requestedPreviews.add(slot.sourceId);
+          const source = sources.get(slot.sourceId);
+          if (source) engine.ensurePreview(source).then(() => render()).catch((err) => log(`Preview 失敗: ${err.message}`, false));
+        }
+      }
+    }
+  }
+
+  function renderPageCard(page) {
+    let card = pagesEl.querySelector(`[data-page-id="${page.id}"]`);
+    if (!card) {
+      card = document.createElement('div');
+      card.className = 'page-card';
+      card.dataset.pageId = page.id;
+      pagesEl.appendChild(card);
+    }
+    const layout = computePaperPreviewLayout(page.paper ?? paper, resolveZoom('fit-width', {
+      containerWidthPx: 220, containerHeightPx: 99999,
+      paperWidthPt: computePaperPreviewLayout(page.paper ?? paper, 1).paperPt.width,
+      paperHeightPt: computePaperPreviewLayout(page.paper ?? paper, 1).paperPt.height,
+    }));
+    const paperEl = renderPaper(card, layout);
+    const contentEl = paperEl.querySelector(':scope > .pl-content-area');
+    renderSlots(contentEl, page.slots, layout.contentAreaPx.width, layout.contentAreaPx.height);
+    for (const el of contentEl.querySelectorAll(':scope > .pl-slot')) {
+      const slot = page.slots.find((s) => s.id === el.dataset.slotId);
+      const px = computeSlotPx(slot, layout.contentAreaPx.width, layout.contentAreaPx.height);
+      renderSlotContent(el, slot, resolveContent(slot.sourceId), px.width, px.height);
+    }
+    // §13.1 — Preview must show Crop Marks too, not just bake them into
+    // Export's output (decision_log D-017).
+    const pxPerPt = PX_PER_PT_AT_ZOOM_1 * layout.zoom;
+    renderCropMarks(contentEl, page.slots, layout.contentAreaPx.width, layout.contentAreaPx.height, store.getState().project.cropMarks, pxPerPt);
+  }
+
+  function render() {
+    ensurePreviewsForVisibleSources();
+    const state = store.getState();
+    const keepIds = new Set(state.pages.map((p) => p.id));
+    for (const card of pagesEl.querySelectorAll('.page-card')) if (!keepIds.has(card.dataset.pageId)) card.remove();
+    state.pages.forEach((page) => renderPageCard(page));
+
+    $('readout').textContent = JSON.stringify({
+      pageCount: state.pages.length,
+      pages: state.pages.map((p) => ({ id: p.id, slots: p.slots.map((s) => s.sourceId) })),
+      cropMarks: state.project.cropMarks,
+    }, null, 2);
+    window.__state = state;
+    window.__store = store;
+  }
+
+  function renderTile(source) {
+    const tile = document.createElement('div');
+    tile.className = 'tile';
+    tile.dataset.sourceId = source.id;
+    tile.innerHTML = `
+      <div class="placeholder">載入中…</div>
+      <img style="display:none">
+      <div>${source.kind}${source.kind === 'pdf-page' ? ` p${source.pageIndex + 1}` : ''}</div>
+      <div>${source.fileName ?? ''}</div>
+    `;
+    gallery.appendChild(tile);
+  }
+
+  async function handleFiles(fileList) {
+    for (const file of fileList) {
+      try {
+        if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+          const newSources = await engine.loadPdfFile(file, { pdfjsLib, pageRange: 'all' });
+          for (const s of newSources) {
+            sources.set(s.id, s);
+            store.commit(addSourceAction(s), null);
+            renderTile(s);
+          }
+          log(`載入 PDF ${file.name}:${newSources.length} 頁`, true);
+        } else {
+          const s = await engine.loadImageFile(file);
+          sources.set(s.id, s);
+          store.commit(addSourceAction(s), null);
+          renderTile(s);
+          log(`載入圖片 ${file.name}`, true);
+        }
+      } catch (err) {
+        log(`載入失敗 ${file.name}: ${err.message}`, false);
+        console.error(err);
+      }
+    }
+    render();
+  }
+
+  $('file-input').addEventListener('change', (e) => { if (e.target.files.length) handleFiles(e.target.files); });
+
+  $('run-auto-fill').addEventListener('click', () => {
+    const sourceIds = [...sources.keys()];
+    if (!sourceIds.length) { log('請先載入至少一個來源', false); return; }
+    const templateId = store.getState().pages[0].id;
+    store.commit(autoFillAction(templateId, sourceIds, {}), null);
+    render();
+  });
+
+  $('apply-crop-marks').addEventListener('click', () => {
+    store.commit(setCropMarksAction({
+      enabled: $('crop-marks-enabled').checked,
+      lengthPt: mmToPt(Number($('crop-marks-length').value)),
+      gapPt: mmToPt(Number($('crop-marks-gap').value)),
+      lineWidthPt: Number($('crop-marks-linewidth').value),
+    }), null);
+    log(`Crop Marks 設定套用: ${JSON.stringify(store.getState().project.cropMarks)}`, true);
+    render();
+  });
+
+  async function renderVerificationPage(pageIndex, pdfDoc, label) {
+    const page = await pdfDoc.getPage(pageIndex + 1);
+    const viewport = page.getViewport({ scale: 1 });
+    const wrap = document.createElement('div');
+    wrap.className = 'verify-page';
+    const labelEl = document.createElement('div');
+    labelEl.textContent = `${label} — Page ${pageIndex + 1} (${viewport.width.toFixed(1)} x ${viewport.height.toFixed(1)} pt, rotate=${page.rotate})`;
+    wrap.appendChild(labelEl);
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    wrap.appendChild(canvas);
+    verifyEl.appendChild(wrap);
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    return canvas;
+  }
+
+  async function reloadAndVerify(bytes, label) {
+    const reloaded = await PDFLib.PDFDocument.load(bytes);
+    log(`${label}: pdf-lib 重新載入確認 ${reloaded.getPageCount()} 頁`, true);
+    for (const el of [...verifyEl.querySelectorAll('.verify-page')]) el.remove();
+    const loadingTask = pdfjsLib.getDocument({ data: bytes.slice() });
+    const pdfDoc = await loadingTask.promise;
+    for (let i = 0; i < pdfDoc.numPages; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await renderVerificationPage(i, pdfDoc, label);
+    }
+    log(`${label}: pdf.js 重新渲染確認 ${pdfDoc.numPages} 頁`, true);
+    return { reloaded, pdfDoc };
+  }
+
+  $('export-pdf').addEventListener('click', async () => {
+    try {
+      const state = store.getState();
+      const bytes = await exportProjectToPdf(state, { binaryStore, pdfLib: PDFLib, transcodeWebpToPng });
+      window.__lastExportBytes = bytes;
+      log(`Export 完成:${bytes.length} bytes`, true);
+
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const link = $('download-link');
+      link.href = url;
+      link.style.display = '';
+      link.textContent = `下載匯出的 PDF (${bytes.length} bytes)`;
+
+      const result = await reloadAndVerify(bytes, 'Export');
+      window.__reloadedPageCount = result.reloaded.getPageCount();
+      window.__reloadedViaPdfJsPageCount = result.pdfDoc.numPages;
+    } catch (err) {
+      log(`Export 失敗: ${err.message}`, false);
+      console.error(err);
+    }
+  });
+
+  // §15.1 — "Print" calls the EXACT SAME exportProjectToPdf() Export does,
+  // then hands the bytes to openPdfBytesForPrint() (Blob + browser's own PDF
+  // viewer) — never a second rendering path. window.__printBytes lets
+  // Playwright verify byte-identity against window.__lastExportBytes
+  // (§23.6.2) for the same store state.
+  $('print-btn').addEventListener('click', async () => {
+    try {
+      const state = store.getState();
+      const bytes = await exportProjectToPdf(state, { binaryStore, pdfLib: PDFLib, transcodeWebpToPng });
+      window.__printBytes = bytes;
+      openPdfBytesForPrint(bytes);
+      log(`Print: 開啟 ${bytes.length} bytes 於瀏覽器內建 PDF Viewer`, true);
+    } catch (err) {
+      log(`Print 失敗: ${err.message}`, false);
+      console.error(err);
+    }
+  });
+
+  // §15.3 — standalone calibration page, independent of the current Project.
+  $('calibration-btn').addEventListener('click', async () => {
+    try {
+      const bytes = await exportCalibrationPagePdf({ pdfLib: PDFLib });
+      window.__calibrationBytes = bytes;
+      openPdfBytesForPrint(bytes);
+      log(`Calibration Page: 開啟 ${bytes.length} bytes`, true);
+    } catch (err) {
+      log(`Calibration Page 失敗: ${err.message}`, false);
+      console.error(err);
+    }
+  });
+
+  log('就緒,請選擇 PDF 或圖片檔案');
+  render();
+
+  window.__engine = engine;
+  window.__sources = sources;
+  window.__handleFiles = handleFiles;
+  window.__waitForAllThumbnails = () => engine.waitForAllThumbnails();
+  window.__runAutoFill = () => $('run-auto-fill').click();
+  window.__exportPdf = () => $('export-pdf').click();
+  window.__printPdf = () => $('print-btn').click();
+  window.__printCalibrationPage = () => $('calibration-btn').click();
+  window.__applyCropMarks = ({ enabled, lengthMm, gapMm, lineWidthPt }) => {
+    $('crop-marks-enabled').checked = enabled;
+    if (lengthMm !== undefined) $('crop-marks-length').value = lengthMm;
+    if (gapMm !== undefined) $('crop-marks-gap').value = gapMm;
+    if (lineWidthPt !== undefined) $('crop-marks-linewidth').value = lineWidthPt;
+    $('apply-crop-marks').click();
+  };
+  window.__reloadAndVerifyBytes = (bytes, label) => reloadAndVerify(bytes, label);
+</script>
+</body>
+</html>

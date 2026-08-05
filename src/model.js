@@ -3,7 +3,7 @@
 // Layout Model to be fully independent of the DOM; a factory returning a
 // plain object is what makes that checkable.
 
-import { paperSizePt } from './geometry.js';
+import { paperSizePt, mmToPt } from './geometry.js';
 
 export const SCHEMA_VERSION = 1;
 
@@ -122,6 +122,23 @@ function stripSourceRef(slot) {
   return { ...rest, sourceId: null };
 }
 
+// §16 Crop Marks — length/gap/line-width are all plan.md-mandated [M]
+// controls but plan.md names no defaults, so these three are a Phase 8
+// judgment call (decision_log D-017): 5mm length, 3mm gap ("與內容距離",
+// i.e. how far outside the Slot the mark starts — there is no Bleed
+// concept in MVP, §16's Bleed row is [S]/second-stage, so this gap is the
+// mark's only standoff from the Slot edge), 0.5pt line width (a visible
+// but still hairline-weight stroke). Off by default — a Project with no
+// print-aid needs should not gain marks on export/print just by existing.
+export function createCropMarksSettings(overrides = {}) {
+  return {
+    enabled: overrides.enabled ?? false,
+    lengthPt: overrides.lengthPt ?? mmToPt(5),
+    gapPt: overrides.gapPt ?? mmToPt(3),
+    lineWidthPt: overrides.lineWidthPt ?? 0.5,
+  };
+}
+
 // §5.1 / §17.2 Project — the persisted unit (project.json). Carries
 // schemaVersion so a future format change can migrate instead of silently
 // dropping fields (§17.2).
@@ -130,6 +147,7 @@ export function createProject(overrides = {}) {
     schemaVersion: SCHEMA_VERSION,
     name: overrides.name ?? '未命名專案',
     paper: overrides.paper ?? createPaperSettings(),
+    cropMarks: overrides.cropMarks ?? createCropMarksSettings(),
   };
 }
 

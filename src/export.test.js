@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSlot, createSource, createPaperSettings, createAppState, createPage } from './model.js';
+import { createSlot, createSource, createPaperSettings, createAppState, createPage, createProject, createCropMarksSettings } from './model.js';
 import { applyToPoint, boundingBoxOfTransformedRect } from './geometry.js';
 import {
   roundedPaperSizePt,
@@ -204,6 +204,7 @@ function makeFakePdfLib({ encryptedDocIds = new Set() } = {}) {
   class FakeEncryptedPDFError extends Error {}
   const embedCalls = [];
   const drawnXObjectKeys = []; // in call order, across the whole run
+  const lineCalls = []; // §16 Crop Marks, across the whole run
 
   function makeFakePage() {
     let xObjectCounter = 0;
@@ -213,6 +214,7 @@ function makeFakePdfLib({ encryptedDocIds = new Set() } = {}) {
         const drawOp = ops.find((o) => o.op === 'Do');
         if (drawOp) drawnXObjectKeys.push(drawOp.args[0]);
       },
+      drawLine(opts) { lineCalls.push(opts); },
     };
   }
 
@@ -249,6 +251,7 @@ function makeFakePdfLib({ encryptedDocIds = new Set() } = {}) {
   return {
     embedCalls,
     drawnXObjectKeys,
+    lineCalls,
     EncryptedPDFError: FakeEncryptedPDFError,
     PDFDocument: {
       create: async () => makeFakeOutDoc(),
@@ -264,6 +267,7 @@ function makeFakePdfLib({ encryptedDocIds = new Set() } = {}) {
     endPath: () => ({ op: 'n' }),
     concatTransformationMatrix: (...args) => ({ op: 'cm', args }),
     drawObject: (name) => ({ op: 'Do', args: [name] }),
+    rgb: (r, g, b) => ({ r, g, b }),
   };
 }
 
@@ -441,4 +445,43 @@ test('exportProjectToPdf sets Producer metadata and a creation date, nothing use
   await exportProjectToPdf(state, { binaryStore, pdfLib });
   assert.equal(capturedDoc.producer, 'pdfprint-layout');
   assert.ok(capturedDoc.creationDate instanceof Date);
+});
+
+// --- exportProjectToPdf: Crop Marks (§16, Phase 8) --------------------------
+
+test('exportProjectToPdf draws no crop marks when project.cropMarks.enabled is false (the default)', async () => {
+  const binaryStore = createBinaryStore();
+  const state = makeStateWithSources([], [createPage({ slots: [createSlot()] })]);
+  const pdfLib = makeFakePdfLib();
+  await exportProjectToPdf(state, { binaryStore, pdfLib });
+  assert.equal(pdfLib.lineCalls.length, 0);
+});
+
+test('exportProjectToPdf draws 8 crop-mark lines per Slot when enabled, even for an Empty Slot with no Source', async () => {
+  const binaryStore = createBinaryStore();
+  const state = createAppState({
+    project: createProject({ cropMarks: createCropMarksSettings({ enabled: true, lengthPt: 10, gapPt: 5, lineWidthPt: 0.5 }) }),
+    sources: [],
+    pages: [createPage({ slots: [createSlot({ sourceId: null }), createSlot({ sourceId: null })] })],
+  });
+  const pdfLib = makeFakePdfLib();
+  await exportProjectToPdf(state, { binaryStore, pdfLib });
+  assert.equal(pdfLib.lineCalls.length, 16); // 8 segments x 2 Slots
+  assert.equal(pdfLib.lineCalls[0].thickness, 0.5);
+  assert.deepEqual(pdfLib.lineCalls[0].color, { r: 0, g: 0, b: 0 });
+});
+
+test('exportProjectToPdf: crop marks are drawn once per Slot per PAGE, not once globally', async () => {
+  const binaryStore = createBinaryStore();
+  const state = createAppState({
+    project: createProject({ cropMarks: createCropMarksSettings({ enabled: true }) }),
+    sources: [],
+    pages: [
+      createPage({ slots: [createSlot()] }),
+      createPage({ slots: [createSlot(), createSlot()] }),
+    ],
+  });
+  const pdfLib = makeFakePdfLib();
+  await exportProjectToPdf(state, { binaryStore, pdfLib });
+  assert.equal(pdfLib.lineCalls.length, 8 * 3); // 1 slot on page 1 + 2 slots on page 2 = 3 slots total
 });

@@ -207,3 +207,13 @@ export function addSourceAction(source) {
 export function removeSourceAction(sourceId) {
   return (state) => ({ ...state, sources: state.sources.filter((s) => s.id !== sourceId) });
 }
+
+// §16 Crop Marks (Phase 8) — merges a partial update into
+// state.project.cropMarks, mirroring how the paper-settings UI would merge
+// a single changed field rather than requiring the whole settings object.
+export function setCropMarksAction(overrides) {
+  return (state) => ({
+    ...state,
+    project: { ...state.project, cropMarks: { ...state.project.cropMarks, ...overrides } },
+  });
+}

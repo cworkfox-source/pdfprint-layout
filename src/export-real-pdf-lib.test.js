@@ -13,7 +13,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSource, createSlot, createPage, createAppState, createPaperSettings } from './model.js';
+import { createSource, createSlot, createPage, createAppState, createPaperSettings, createProject, createCropMarksSettings } from './model.js';
 import { createBinaryStore } from './binary-store.js';
 import { exportProjectToPdf } from './export.js';
 
@@ -171,6 +171,31 @@ test('real pdf-lib: a /Rotate 90 source page is embedded and drawn with the comb
   // ran without throwing and produced a well-formed, single-page PDF).
   assert.equal(reloaded.getPage(0).getRotation().angle, 0);
   assert.equal(reloaded.getPageCount(), 1);
+});
+
+test('real pdf-lib: enabling Crop Marks draws exactly 8 real stroked lines per Slot (§16, Phase 8)', { skip }, async () => {
+  const binaryStore = createBinaryStore();
+  const state = createAppState({
+    project: createProject({ cropMarks: createCropMarksSettings({ enabled: true, lengthPt: 10, gapPt: 5, lineWidthPt: 0.5 }) }),
+    sources: [],
+    pages: [createPage({ slots: [createSlot({ sourceId: null }), createSlot({ sourceId: null })] })],
+  });
+
+  const outBytes = await exportProjectToPdf(state, { binaryStore, pdfLib: PDFLib });
+  const reloaded = await PDFLib.PDFDocument.load(outBytes);
+  const contents = reloaded.getPage(0).node.normalizedEntries().Contents;
+  let text = '';
+  for (let i = 0; i < contents.size(); i += 1) {
+    const stream = contents.lookup(i);
+    const decoded = stream.getUnencodedContents ? stream.getUnencodedContents() : PDFLib.decodePDFRawStream(stream).decode();
+    text += new TextDecoder('latin1').decode(decoded);
+  }
+  // pdf-lib's drawLine() emits exactly one `S` (stroke) operator per call
+  // (see vendor/pdf-lib's `drawLine`) — 8 segments x 2 Slots = 16 strokes,
+  // and nothing else on this content-free page (no Slot has a Source) would
+  // emit a stroke operator, so this count is unambiguous.
+  const strokeCount = text.split(/\s+/).filter((tok) => tok === 'S').length;
+  assert.equal(strokeCount, 16);
 });
 
 // Minimal valid 1x1 black RGB PNG, hand-assembled (no npm image library

@@ -37,3 +37,20 @@ export async function transcodeWebpToPng(bytes) {
   canvas.height = 0;
   return new Uint8Array(await pngBlob.arrayBuffer());
 }
+
+// §15.1 — "Print" is NOT a third rendering path: it opens the exact same PDF
+// bytes exportProjectToPdf() would produce for "Export PDF" via a Blob URL,
+// letting the browser's own built-in PDF viewer handle the actual print
+// (menu/keyboard-shortcut inside that viewer) — never `window.print()` on
+// the app's own DOM, which plan.md explicitly rules out (§15.1's whole
+// reason for existing: a DOM print path would be a second, unverified
+// geometry implementation). Because the caller must pass in the SAME bytes
+// it already got back from exportProjectToPdf(), §23.6.2's "列印與匯出 PDF
+// 產生的 PDF byte 內容一致" is true by construction, not something this
+// function needs to separately guarantee.
+export function openPdfBytesForPrint(pdfBytes) {
+  const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
+  return url;
+}

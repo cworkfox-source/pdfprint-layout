@@ -9,9 +9,10 @@ import {
   createPage,
   createTemplate,
   createProject,
+  createCropMarksSettings,
   createAppState,
 } from './model.js';
-import { paperSizePt } from './geometry.js';
+import { paperSizePt, mmToPt } from './geometry.js';
 
 test('createSource requires a kind and fills defaults', () => {
   assert.throws(() => createSource({}));
@@ -106,6 +107,25 @@ test('createProject carries the current schemaVersion (§17.2)', () => {
   const project = createProject();
   assert.equal(project.schemaVersion, SCHEMA_VERSION);
   assert.equal(project.paper.size, 'A4');
+});
+
+test('createCropMarksSettings defaults to disabled with the Phase 8 assumed values (D-017)', () => {
+  const cropMarks = createCropMarksSettings();
+  assert.equal(cropMarks.enabled, false);
+  assert.equal(cropMarks.lengthPt, mmToPt(5));
+  assert.equal(cropMarks.gapPt, mmToPt(3));
+  assert.equal(cropMarks.lineWidthPt, 0.5);
+});
+
+test('createCropMarksSettings accepts overrides', () => {
+  const cropMarks = createCropMarksSettings({ enabled: true, lengthPt: 10, gapPt: 5, lineWidthPt: 1 });
+  assert.deepEqual(cropMarks, { enabled: true, lengthPt: 10, gapPt: 5, lineWidthPt: 1 });
+});
+
+test('createProject wires cropMarks defaults (disabled) via createCropMarksSettings', () => {
+  const project = createProject();
+  assert.equal(project.cropMarks.enabled, false);
+  assert.equal(project.cropMarks.lengthPt, mmToPt(5));
 });
 
 test('createAppState wires sensible defaults for a fresh session', () => {

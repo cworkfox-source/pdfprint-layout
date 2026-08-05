@@ -2,18 +2,20 @@
 
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
 Visual Page Imposition Designer,public repo
-https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-7 已完成**
+https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-8 已完成**
 (引擎層:geometry/store/model、Source Engine、Layout Engine、Free Layout
-Designer、Source Placement、Auto Imposition、**PDF Export**〔pdf-lib 輸出,
-§23.3 Preview/Export 等價性以 104 案例證實,並修正一個嚴重的 XObject
-座標系 bug,見 D-016〕,382 個單元測試 + 瀏覽器實測(含真實 pdf-lib/pdf.js
-往返驗證)皆通過)。下一步:Phase 8 Print Path(列印經由匯出的 PDF、列印
-校正頁)。無 blocker。
+Designer、Source Placement、Auto Imposition、PDF Export〔pdf-lib 輸出,
+§23.3 等價性 104 案例證實,修正 D-016 XObject 座標系 bug〕、**Print
+Path**〔列印與匯出共用 `exportProjectToPdf()`、Crop Marks、100mm 列印
+校正頁,見 D-017〕,403 個單元測試 + 瀏覽器實測皆通過)。下一步:Phase 9
+Project System(存檔/讀檔、Template、Undo/Redo 驗收、schemaVersion
+migration)。無 blocker。
 
 ## Current Version
-Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 7 完成
-(含 Phase 4 遺留的鎖定/解鎖、Z-order [M] 缺口補完見 D-013、AppState.sources
-從未被寫入的缺口補完見 D-015;無產品 UI,僅引擎與 dev 檢查頁)
+Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 8 完成
+(含 Phase 4 遺留的鎖定/解鎖、Z-order [M] 缺口補完見 D-013、
+AppState.sources 從未被寫入的缺口補完見 D-015、Crop Marks 預設值與繪製
+範圍見 D-017;無產品 UI,僅引擎與 dev 檢查頁)
 
 ## Project Goals
 純前端、零後端、可離線、可打包為單一 HTML 的視覺化拼版工具。使用者載入 PDF 或
@@ -302,14 +304,58 @@ Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 7 �
     正確——非僅靠自動化像素計數,人工檢視畫面才發現前述關鍵 bug)全數
     通過,console 無錯誤。
 
+- Phase 8 Print Path(2026-08-06):
+  - `src/model.js` 新增 `createCropMarksSettings()`(`enabled` 預設
+    `false`、`lengthPt`/`gapPt`/`lineWidthPt` 有明確預設值,plan.md 未指定
+    數值,見 decision_log D-017),掛在 `createProject().cropMarks` 上
+    (§17.1 Project Settings 的一部分,會隨專案存檔)。
+  - `src/print.js`(新增)— `computeCropMarksForSlot()`/
+    `cropMarkSegmentsToPdfSpace()`(§16 純函式,每個 Slot 四角各 2 條線段,
+    往外偏移 `gapPt`、延伸 `lengthPt`)、`computeCalibrationPageContent()`/
+    `exportCalibrationPagePdf()`(§15.3,固定 A4、與目前 Project 紙張設定
+    無關,100mm 測試框 + 每 10mm 一個刻度 + 純 ASCII 英文說明文字——中文
+    需要 fontkit 內嵌字型子集,§16 已明訂為第二階段議題,見 D-017)。
+  - `src/export.js` 的 `exportProjectToPdf()` 在 `state.project.cropMarks.
+    enabled` 時,對每頁**每一個 Slot**(不論是否已指派 Source)畫 Crop
+    Marks,用 pdf-lib 高階 `page.drawLine()`(直線沒有 D-016 的矩陣分解
+    風險,不必比照 XObject 繪製改走低階 operator)。
+  - `src/preview.js` 新增 `renderCropMarks()` — §13.1 [M] 明訂 Preview
+    Canvas 必須顯示 Crop Marks,這次隨 Export 一起補上而非留到之後,重用
+    `print.js` 的同一個 `computeCropMarksForSlot()`(§4.3),座標原點採
+    D-012 已建立的「content-area 本地座標」慣例。
+  - `src/reducers.js` 新增 `setCropMarksAction()`(合併式更新
+    `state.project.cropMarks`)。
+  - `src/export-adapters.js` 新增 `openPdfBytesForPrint()` — §15.1「列印
+    一律經由 Export Renderer」的實際接線:Blob + `URL.createObjectURL` +
+    `window.open()`,不額外呼叫 `window.print()`(交給瀏覽器內建 PDF
+    Viewer 自己的列印功能,理由見 D-017)。「列印」按鈕與「匯出 PDF」按鈕
+    各自獨立呼叫同一個 `exportProjectToPdf()`,因此兩者輸出對同一個
+    store 狀態必然一致(§23.6.2),不是額外要維護的第二條路徑。
+  - `dev/print.html`(新增)— Phase 8 dev harness:沿用 Phase 7
+    `dev/export.html` 的 Source Gallery/Auto Fill/驗證面板,新增 Crop
+    Marks 控制面板(啟用開關 + 長度/間距/線寬)、Print 按鈕、Print
+    Calibration Page 按鈕。
+  - 21 個新測試(共 403 個:純函式/fake 層級 17〔`print.js` 9、
+    `model.js` 3、`export.js` 3、`reducers.js` 2〕+ 真實 pdf-lib 層級 4
+    〔新檔案 `print-real-pdf-lib.test.js` 3、`export-real-pdf-lib.test.js`
+    新增 1 個 Crop Marks 迴歸測試〕)+ 瀏覽器實測(Playwright:Preview
+    端 Crop Marks 開關正確增減 DOM 元素;Export 輸出以真實 pdf.js 重新
+    渲染後,在紙張邊界內量得到 Crop Marks 的深色像素;Print 與 Export
+    針對同一個 store 狀態各自呼叫 `exportProjectToPdf()`,產生的 PDF
+    bytes 在排除 `/CreationDate` 時間戳記後完全一致;Print 與 Calibration
+    Page 兩個按鈕皆確實開啟新分頁;校正頁 100mm 方框在真實 pdf.js 重新
+    渲染的畫布上量得約 283–284px,與換算值吻合)全數通過,console 無
+    錯誤。
+
 ## Features In Development
-Phase 8(列印路徑)尚未開始:列印一律經由匯出的 PDF(§15.1,不採用
-`window.print()` 直接列印 DOM,避免第三套幾何實作)、列印校正頁
-(§15.3,100mm×100mm 測試框供使用者確認印表機為 Actual Size)、Crop
-Marks。見 `docs/plan.md` §15。
+Phase 9(專案系統)尚未開始:Project 存檔/讀檔(`.json`,§17.1,Source
+二進位不內嵌)、`schemaVersion` migration(§17.2)、Layout Template 儲存/
+載入(§17.3,僅保存 Paper/Margins/Slots,不保存 Source)、Undo/Redo 的
+完整驗收(store.js 自 Phase 4 起已實作,但尚未有專案存檔情境下的往返
+測試)。見 `docs/plan.md` §17。
 
 ## Planned Features
-見 `docs/plan.md` §22 開發階段。Phase 8 → Phase 11。
+見 `docs/plan.md` §22 開發階段。Phase 9 → Phase 11。
 
 ## Known Issues
 - plan.md §9.1 的「2+2」preset 未定義其與 2×2 grid(=4up)的幾何差異,
@@ -345,6 +391,14 @@ Marks。見 `docs/plan.md` §15。
   `addSourceAction`/`removeSourceAction`,回頭修改三個 dev harness)。若日後
   新增 Source 載入入口,務必同步呼叫 `addSourceAction`,否則 Export 會對
   該 Source 拋「unknown source」錯誤,見 decision_log D-015。
+- 列印校正頁(`exportCalibrationPagePdf()`)固定使用 A4 紙張、純 ASCII
+  英文說明文字,與目前 Project 的紙張設定/UI 語言無關——這是刻意的範圍
+  控制(校正頁測試的是印表機本身,不是使用者版面;中文需要 fontkit 內嵌
+  字型子集,§16 已明訂為第二階段議題),不是遺漏,見 decision_log D-017。
+- Crop Marks 的 `gapPt`(與 Slot 邊緣的距離)目前語意上等同「與內容的
+  距離」,但 MVP 沒有 Bleed(出血,§16 [S])概念。日後若加入 Bleed,需要
+  重新檢視這個距離該從 Slot 邊緣算起還是從出血邊界算起,見 decision_log
+  D-017 Future Review Conditions。
 
 ## Technical Architecture
 Vanilla HTML5 + ES6+,PDF.js 負責解析與預覽,pdf-lib 負責輸出,esbuild 打包成
@@ -381,6 +435,18 @@ pdf-lib 的模組,同樣採「純函式 + deps 注入」分層:所有 pdf-lib AP
 證明雙方的矩陣數學互相一致,無法證明任一方對真實 pdf-lib 繪製語意是正確
 的——這正是 D-016 那個關鍵 bug 能通過全部等價性測試卻仍視覺錯誤的原因,
 最終靠人工檢視 Playwright 產生的畫面、而非自動化像素計數,才發現問題。
+Phase 8 的 `src/print.js` 延續同一種「純函式 + deps 注入」分層,是第二個
+真正呼叫 pdf-lib 的模組(`exportCalibrationPagePdf()`),但它同時也是第一個
+被**兩個**渲染端共用同一個計算函式的具體案例:`computeCropMarksForSlot()`
+被 `src/export.js`(頁面絕對座標)與 `src/preview.js` 的新
+`renderCropMarks()`(content-area 本地座標,沿用 D-012 的原點慣例)分別
+帶入不同原點呼叫,而非各自重新發明一份 crop-mark 幾何——與 D-012 的
+`computeSlotContentTransform()`/`slotContentMatrix()` 是同一種「一個
+geometry 函式、多個呼叫端各自的原點慣例」模式(§4.3)。「列印」與「匯出
+PDF」兩個按鈕(`dev/print.html`)各自獨立呼叫同一個
+`exportProjectToPdf()`,不是分岔出的第二條算繪路徑,§23.6.2 的「列印與
+匯出 PDF byte 內容一致」因此是架構上自然成立,而非需要額外程式碼保證的
+承諾。
 
 ## Data Structure
 AppState = Project / Sources / Templates / Pages(→ Slots)/ Selection / History。
@@ -396,7 +462,9 @@ creator 經 `store.commit()` 寫入,唯一合法的 mutation 路徑(§7.1)。Slo
 編輯原語、經同一批 `src/reducers.js` action creator 寫入(Phase 5)。
 `AppState.pages` 陣列本身的新增/刪除/複製/重排透過 `src/pages.js` 的純
 原語寫入;Auto Fill(`src/auto-fill.js`)一次性把指定的模板頁替換成多頁,
-兩者皆經 `src/reducers.js` 接上 `store.commit()`(Phase 6)。
+兩者皆經 `src/reducers.js` 接上 `store.commit()`(Phase 6)。`Project`
+新增 `cropMarks` 欄位(§16,`createCropMarksSettings()`,Phase 8),經
+`setCropMarksAction()` 合併式更新,同樣走 `store.commit()`。
 工廠函式見 `src/model.js`,幾何運算見 `src/geometry.js`,狀態管理見
 `src/store.js`,Source Engine 見 `src/sources.js`。詳見 `docs/plan.md` §5–§7、
 §12。

@@ -8,6 +8,7 @@
 
 import { resolvePaperSizePt } from './model.js';
 import { sortByZOrder, slotContentMatrix } from './geometry.js';
+import { computeCropMarksForSlot } from './print.js';
 
 // Preview-only convention: at zoom 1.0, 1pt = 1 CSS px. This is purely a
 // Preview Renderer choice — Export (pdf-lib) never sees pixels, only pt
@@ -161,6 +162,56 @@ export function renderSlots(contentEl, slots, contentAreaWidthPx, contentAreaHei
     contentEl.appendChild(el);
   }
   return contentEl;
+}
+
+// --- Crop Marks (§13.1/§16, Phase 8) --------------------------------------
+// §13.1 [M] explicitly lists Crop Marks among what the Preview canvas must
+// show, alongside Slots — this is the DOM-side twin of export.js's crop-mark
+// drawing, reusing print.js's SAME computeCropMarksForSlot() (§4.3: one
+// geometry function, two renderers) rather than a second implementation.
+//
+// Like computeSlotContentTransform() above (Phase 5, same judgment call,
+// D-012/D-017), this works in coordinates LOCAL to the content-area element
+// (computeSlotPx() already returns content-area-relative px, matching how
+// renderSlots() positions each `.pl-slot`) rather than the page-absolute pt
+// Export's computeSlotAbsoluteRectPt() uses — Preview's content-area `<div>`
+// is already offset via renderPaper(), Export has no such nested container.
+// computeCropMarksForSlot() itself is unit-agnostic (pure ratio/offset math),
+// so passing it PX-converted length/gap alongside a PX slot rect yields PX
+// segments directly — no separate "preview crop-mark geometry" function
+// needed. Unlike Export' cropMarkSegmentsToPdfSpace(), no Y-flip applies
+// here: Preview's own coordinate convention is already top-left/Y-down,
+// the same as Model space, so nothing needs converting.
+export function renderCropMarks(contentEl, slots, contentAreaWidthPx, contentAreaHeightPx, cropMarks, pxPerPt) {
+  for (const el of contentEl.querySelectorAll(':scope > .pl-crop-mark')) el.remove();
+  if (!cropMarks?.enabled) return;
+
+  const lengthPx = cropMarks.lengthPt * pxPerPt;
+  const gapPx = cropMarks.gapPt * pxPerPt;
+  const thicknessPx = Math.max(1, cropMarks.lineWidthPt * pxPerPt);
+
+  for (const slot of slots) {
+    const slotPx = computeSlotPx(slot, contentAreaWidthPx, contentAreaHeightPx);
+    const segments = computeCropMarksForSlot(slotPx, { lengthPt: lengthPx, gapPt: gapPx });
+    for (const seg of segments) {
+      const el = document.createElement('div');
+      el.className = 'pl-crop-mark';
+      el.style.position = 'absolute';
+      el.style.background = '#000';
+      if (seg.x1 === seg.x2) {
+        el.style.left = `${seg.x1 - thicknessPx / 2}px`;
+        el.style.top = `${Math.min(seg.y1, seg.y2)}px`;
+        el.style.width = `${thicknessPx}px`;
+        el.style.height = `${Math.abs(seg.y2 - seg.y1)}px`;
+      } else {
+        el.style.left = `${Math.min(seg.x1, seg.x2)}px`;
+        el.style.top = `${seg.y1 - thicknessPx / 2}px`;
+        el.style.width = `${Math.abs(seg.x2 - seg.x1)}px`;
+        el.style.height = `${thicknessPx}px`;
+      }
+      contentEl.appendChild(el);
+    }
+  }
 }
 
 // --- Source Placement (§10.1/§10.2/§6.6, Phase 5) -------------------------

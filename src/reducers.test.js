@@ -32,6 +32,7 @@ import {
   movePageAction,
   addSourceAction,
   removeSourceAction,
+  setCropMarksAction,
 } from './reducers.js';
 
 function makeTwoPageState() {
@@ -347,4 +348,25 @@ test('removeSourceAction removes a Source by id, leaving others untouched', () =
   store.commit(addSourceAction(b), null);
   store.commit(removeSourceAction('src-a'), null);
   assert.deepEqual(store.getState().sources, [b]);
+});
+
+// --- Crop Marks (§16, Phase 8) ----------------------------------------------
+
+test('setCropMarksAction merges a partial update into state.project.cropMarks, leaving other fields untouched', () => {
+  const store = createStore(makeTwoPageState());
+  const before = store.getState().project.cropMarks;
+  assert.equal(before.enabled, false);
+
+  store.commit(setCropMarksAction({ enabled: true }), null);
+  const after = store.getState().project.cropMarks;
+  assert.equal(after.enabled, true);
+  assert.equal(after.lengthPt, before.lengthPt); // untouched fields survive the merge
+  assert.equal(after.gapPt, before.gapPt);
+  assert.equal(after.lineWidthPt, before.lineWidthPt);
+});
+
+test('setCropMarksAction can update multiple fields at once', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(setCropMarksAction({ enabled: true, lengthPt: 20, gapPt: 10, lineWidthPt: 1 }), null);
+  assert.deepEqual(store.getState().project.cropMarks, { enabled: true, lengthPt: 20, gapPt: 10, lineWidthPt: 1 });
 });

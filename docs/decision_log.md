@@ -1103,3 +1103,137 @@ vs「怎麼把這個位置交給 pdf-lib 這個特定函式庫」)綁在一起,�
 若 pdf-lib 升級版本後改變了 `embedPage`/`embedPng`/`embedJpg` 的
 `boundingBoxAdjustedMatrix`/Image XObject 原生座標系定義,需要重新走一次
 本決議(1)A 的實測校準流程,不能假設既有公式繼續適用。
+
+## D-017 — Phase 8 Print Path:Crop Marks 的預設數值與繪製範圍、校正頁的固定紙張與英文文字、「列印」按鈕不是第三條算繪路徑
+
+### Date
+2026-08-06
+
+### Topic
+架構 / 產品範圍 / 視覺設計預設值
+
+### Context
+實作 Phase 8(plan.md §15 列印路徑、§16 Crop Marks)時遇到四個 plan.md
+未明訂的缺口:
+
+1. §16 表格只說 Crop Marks「可設定長度、與內容距離、線寬」,是 [M] 必備
+   控制項,但完全沒給出這三個數值的預設值,也沒說 marks 要畫在「每個
+   Slot 四角」還是「整張紙的外緣」。
+2. §15.3 要求一個 100mm×100mm 校正框「含刻度與說明文字」,但沒說明這個
+   校正頁本身要用哪種紙張尺寸(是否跟隨目前 Project 的紙張設定?)、要用
+   哪種語言的說明文字。§16 另外明確指出 pdf-lib 標準字型不含中日韓字符,
+   中文文字需要 fontkit 子集內嵌,且明訂這是「第二階段議題」。
+3. §13.1 [M] 明訂 Preview Canvas 必須顯示「Slots、Source Preview、
+   Guides、Crop Marks」,但 Crop Marks 這個功能本身要到 Phase 8 才存在
+   ——它在 Preview 端是否也要跟著這次一起補上,還是可以先只做到 Export
+   輸出裡就好,留到之後再補 Preview 顯示。
+4. §15.1 明訂列印必須「以 Export Renderer 產生 PDF」再用瀏覽器內建 PDF
+   Viewer 開啟,但「Print」按鈕實際上要不要在點擊當下才呼叫
+   `window.print()`,還是把責任完全交給使用者在瀏覽器原生 PDF Viewer
+   裡自己按列印,原文流程圖沒有明確到能直接照抄實作。
+
+### Alternatives Considered
+(1) Crop Marks 預設值與繪製範圍:
+  A. 長度 5mm、間距(與內容/Slot 邊緣的距離)3mm、線寬 0.5pt 三個固定
+     預設值;繪製範圍為**每個 Slot 的四個角**(不論該 Slot 是否已指派
+     Source),因為這是一個拼版軟體,每個 Slot 本身就是使用者印完要裁下來
+     的一個獨立單位,不是只在整張紙外緣畫一圈。
+  B. 只在整張紙(paper)的四個外角畫一次 crop marks,沿用傳統印刷「一張紙
+     只有一組裁切線」的慣例。
+  C. 要求使用者在使用前必須自行輸入所有數值,不提供任何預設值。
+
+(2) 校正頁的紙張與語言:
+  A. 固定使用 A4 直式,與目前 Project 的紙張設定完全無關(校正頁的本質是
+     「測試這台印表機/驅動程式有沒有偷偷縮放」,不是使用者版面的一部分);
+     說明文字用純 ASCII 英文,不使用 fontkit 內嵌中文字型子集。
+  B. 跟隨目前 Project 的紙張設定產生校正頁。
+  C. 說明文字改用中文,順帶把 fontkit 一併引入。
+
+(3) Crop Marks 是否也要補進 Preview:
+  A. 這次一起補上:`preview.js` 新增 `renderCropMarks()`,重用
+     `print.js` 的 `computeCropMarksForSlot()`(§4.3「唯一計算函式,兩個
+     渲染端各自套用」的既有模式,不是又寫一份新的 crop-mark 幾何)。
+  B. 這次只做 Export 輸出,Preview 端的顯示留到之後某個 Phase 再補,列入
+     Known Issues。
+
+(4) 「Print」按鈕的行為邊界:
+  A. 只做到「呼叫 `exportProjectToPdf()` → Blob URL → `window.open()`」
+     為止,不主動呼叫 `window.print()`——實際列印動作交給瀏覽器內建 PDF
+     Viewer 自己的列印按鈕/快捷鍵。
+  B. 額外在新分頁載入後自動呼叫該分頁的 `window.print()`。
+
+### Selected Solution
+(1) A。(2) A。(3) A。(4) A。
+
+### Reason
+(1)A 案是本工具「一次印出多份、印完裁開」這個核心使用情境下唯一合理的
+語意——B 案的「整張紙外緣一組裁切線」是傳統單一版面印刷的慣例,套用在
+N-up 拼版工具上使用者反而看不出每一格該從哪裡裁,C 案则讓 Crop Marks
+預設關閉時仍然「有功能卻不能用」,增加不必要的操作摩擦,且與本專案一路
+以來「所有 Phase 都提供一組合理預設值、讓使用者可以不填任何東西就先看到
+效果」的慣例(paper margin、Auto Fill 的 order/filter 皆有預設)不一致。
+(2)A 案把「校正印表機本身有沒有問題」與「使用者目前的版面設計」完全
+切開,任何人在任何 Project 狀態下點擊都能拿到同一張可信賴的測試頁,B 案
+會讓校正頁本身的可信度隨 Project 設定變動而變動,偏離它原本要驗證的東西
+(印表機,而非版面);而 C 案在 §16 已經明文把中文字型子集列為第二階段
+議題的前提下,若只為一頁校正頁就提前引入 fontkit,會顯著增加打包體積換取
+一個與產品核心功能無關的頁面,不成比例。
+(3)A 案維持本專案一路以來「一個座標/繪製函式,Preview 與 Export 各自帶
+入自己的原點慣例」的既有紀律(D-012 的 `computeSlotContentTransform()`
+即是同一套模式的前例)——§13.1 原文本來就把 Crop Marks 與 Slots 並列為
+Preview 必須顯示的項目,拖到之後才補等同於讓「Phase 0-8 已完成」的說法
+不完全誠實,與 Phase 5 完整性稽核之後建立的「不要遺留看得到的 [M] 缺口」
+慣例衝突。
+(4)A 案完全對應 §15.1 流程圖本身的字面意思——「由瀏覽器內建 PDF Viewer
+列印」講的是使用者在那個 Viewer 裡自己觸發列印,不是我方程式碼代為呼叫；
+B 案額外呼叫 `window.print()` 在多數瀏覽器對一個剛用 `window.open()`
+開啟、內容還在非同步載入中的分頁上呼叫,行為並不可靠(可能印出空白頁或
+被瀏覽器忽略),徒增一個未被 plan.md 要求、也難以自動化驗證正確性的動作。
+
+### Consequences
+- `src/model.js`:新增 `createCropMarksSettings()`(`enabled` 預設
+  `false`、`lengthPt` 預設 `mmToPt(5)`、`gapPt` 預設 `mmToPt(3)`、
+  `lineWidthPt` 預設 `0.5`),掛在 `createProject().cropMarks` 上(屬於
+  §17.1 的 Project Settings,會隨專案存檔,非 Phase 9 才要處理的缺口)。
+- `src/print.js`(新增):`computeCropMarksForSlot()`/
+  `cropMarkSegmentsToPdfSpace()`(純函式,§16),
+  `computeCalibrationPageContent()`/`exportCalibrationPagePdf()`(§15.3,
+  deps 注入 pdfLib,與 `export.js` 同一種分層)。
+- `src/export.js` 的 `exportProjectToPdf()` 在每頁 Slot 內容畫完後,若
+  `state.project.cropMarks.enabled`,對該頁**每一個 Slot**(不論是否有
+  Source)畫 crop marks,使用 pdf-lib 高階 `page.drawLine()`(不是
+  `computeXObjectDrawMatrix()` 用的低階 operator——直線沒有 D-016 那種
+  矩陣分解風險,沒有必要繞開高階 API)。
+- `src/preview.js` 新增 `renderCropMarks()`,DOM adapter,重用
+  `print.js` 的 `computeCropMarksForSlot()`,座標原點採用
+  `computeSlotContentTransform()`(D-012)已建立的「content-area 本地座標」
+  慣例,而非 Export 用的頁面絕對座標。
+- `src/reducers.js` 新增 `setCropMarksAction()`,合併式更新
+  `state.project.cropMarks`。
+- `src/export-adapters.js` 新增 `openPdfBytesForPrint()`:Blob +
+  `window.open()`,不呼叫 `window.print()`。
+- `dev/print.html`(新增,Phase 8 dev harness):Crop Marks 控制面板
+  (啟用開關 + 長度/間距/線寬輸入)、Print 按鈕、Print Calibration Page
+  按鈕,驗證面板沿用 Phase 7 `dev/export.html` 的「真實 pdf-lib 重新載入 +
+  真實 pdf.js 重新渲染」雙重確認模式。
+- 21 個新測試(共 403 個,238 → 382 是 Phase 7、382 → 403 是本 Phase):
+  純函式/fake 層級 17 個(`print.js` 9、`model.js` 3、`export.js` 3、
+  `reducers.js` 2)+ 真實 pdf-lib 層級 4 個(`print-real-pdf-lib.test.js`
+  3〔新檔案,guarded skip〕、`export-real-pdf-lib.test.js` 1 個 Crop Marks
+  迴歸測試)+ 瀏覽器實測(Playwright:Preview 端 Crop Marks 開關
+  正確增減 DOM 元素;Export 輸出以真實 pdf.js 重新渲染後,在紙張邊界內
+  量得到 Crop Marks 的深色像素;Print 與 Export 針對同一個 store 狀態各自
+  獨立呼叫 `exportProjectToPdf()`,產生的 PDF bytes 在排除
+  `/CreationDate` 時間戳記欄位後完全一致,§23.6.2 成立;Print 與 Print
+  Calibration Page 兩個按鈕皆確實開啟新分頁;校正頁的 100mm 方框在真實
+  pdf.js 重新渲染的畫布上量得約 283–284px 寬,與 100mm 換算值吻合)全數
+  通過,console 無錯誤(除瀏覽器對 `/favicon.ico` 的既有 404,與本 Phase
+  無關,見驗證腳本註解)。
+
+### Future Review Conditions
+若日後新增 Bleed(§16 [S],第二階段)概念,Crop Marks 與 Slot 邊緣的
+`gapPt` 語意需要重新檢視——屆時「與內容距離」可能要改成「與出血邊界的
+距離」而非現在的「與 Slot 邊緣的距離」,不能假設現有的 `computeCropMarksForSlot()`
+參數形狀繼續適用。若使用者明確要求校正頁改用中文說明文字,需要一併評估
+引入 `fontkit` 的打包體積代價,而不是繞過 §16 已記錄的「第二階段議題」
+自行決定。

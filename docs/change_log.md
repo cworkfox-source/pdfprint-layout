@@ -2,105 +2,6 @@
 
 > Older entries: docs/logs/ (archive, do not load at startup)
 
-## 2026-08-05 19:30
-
-### Type
-Feature
-
-### Summary
-完成 Phase 2 Source Engine:PDF/圖片載入、每頁獨立 Source、§12.3
-SourceBinaryStore(原始 bytes 保留規則)、§12.5 Thumbnail/Preview LRU
-快取與最多 3 個並行 render 工作、§12.2 頁碼範圍解析、§12.6 記憶體釋放
-(含跨頁 docId 參照計數)。38 個新單元測試(共 89 個)+ 真實瀏覽器
-(Playwright + Chromium)實測驗證。
-
-### Files Changed
-- src/model.js — `createSource()` 新增 `docId` 欄位
-- src/page-range.js、src/page-range.test.js(新增)
-- src/lru-cache.js、src/lru-cache.test.js(新增)
-- src/binary-store.js、src/binary-store.test.js(新增)
-- src/sources.js、src/sources.test.js(新增)— Source Engine 核心,
-  deps 注入使純邏輯可在 Node 測試,不需真實 PDF.js/瀏覽器
-- src/render-adapters.js(新增)— Canvas/PDF.js 實際 render 的瀏覽器端
-  adapter,不含任何 orchestration 邏輯
-- dev/sources.html(新增)— Phase 2 dev harness,非產品 UI
-- scripts/make-test-pdf.mjs(新增)— 零依賴合成測試 PDF 產生器(混合
-  A4/A3 尺寸 + 一頁 /Rotate 90,對應 §12.4/§14.3)
-- scripts/fetch-vendor.sh(新增)— pin pdf.js v5.4.149,供 Phase 2+
-  開發使用(與 spike/fetch-vendor.sh 的 v6.2.108 歷史紀錄分開,見下)
-- .gitignore — 新增 `/fixtures/`(合成測試 PDF,可由腳本重現)
-- docs/plan.md — §5.2 補上 `docId` 欄位說明
-- docs/decision_log.md — 新增 D-009(docId 設計、cropBox/mediaBox 取值
-  範圍、pdf.js 開發版本改 pin 的理由)
-
-### Reason
-延續 Phase 1 完成後的下一步(plan.md §22:Source Engine 在 Paper Engine
-之後)。decision_log D-005 已將 §12.3 bytes 保留規則列為 Phase 2 的硬性
-驗收項目,必須這一階段就落實,不能延後。
-
-### Implementation Details
-沿用 Phase 0/1 已建立的「純邏輯可測 / DOM-Canvas-第三方庫觸碰面薄」分離
-原則(§4.1):`sources.js` 只做 orchestration(頁碼範圍解析、docId/bytes
-記帳、並行度限制、快取存取、release 生命週期),所有實際 Canvas 繪製、
-PDF.js `page.render()`、`createImageBitmap()` 呼叫都透過 `deps.render*`
-/`deps.decodeImage` 注入,`render-adapters.js` 只提供這些注入的瀏覽器端
-實作。這讓 89 個測試中的 38 個 Phase 2 測試全部能在純 Node(`node:test`)
-下用假的 `pdfjsLib`/render 函式跑,不需要啟動瀏覽器。
-
-`docId` 設計解決「一份 PDF 檔案多頁,但原始 bytes 只該存一份」的問題:
-同一檔案的所有 page-Source 共用一個 docId,`sources.js` 對每個 docId 維護
-參照計數,只有最後一個引用它的 Source 被 `releaseSource()` 時才真正呼叫
-`binaryStore.remove()` 與 `loadingTask.destroy()`(pdf.js v6 起無
-`pdfDoc.destroy()`,沿用 D-008 記錄的 `loadingTask.destroy()`)。
-
-§12.5 的三個門檻具體實作:`computeThumbnailSize()`(長邊 200px)、
-`computePreviewCanvasSize()`(150 DPI,長邊上限 4096px,快取已建但 Phase 2
-尚未有任何呼叫端填入內容,留給之後真正需要中解析度 Canvas 的 Phase)、
-`createRenderQueue(3)`(最多 3 個並行 render,其餘排隊,用手動控制
-resolve 時機的假任務測試驗證排隊/釋放行為)。`createLruCache()` 為通用
-LRU,`onEvict` 掛 §12.6 的釋放邏輯(revokeObjectURL、canvas 歸零、
-ImageBitmap.close()),Thumbnail 快取上限 300、Preview 快取上限 60。
-
-實測階段發現此開發環境(Playwright 內建 Chromium 141)無法 render 用
-spike 選用的 pdf.js v6.2.108(呼叫了尚未普及的
-`Map.prototype.getOrInsertComputed`),改用 v5.4.149 後恢復正常,細節與
-理由見 decision_log D-009(刻意不動 spike 既有的驗證記錄與腳本)。
-
-### Impact Analysis
-Phase 2 是 decision_log D-005 認定的高風險項目(ArrayBuffer detach)的
-實際驗收點,現在有程式碼與瀏覽器實測雙重證據支撐,不再只是文件承諾。
-`docId` 欄位與參照計數機制也是 Phase 7 Export 需要的資料流基礎(同一 PDF
-檔案的多個 Slot/頁面共用同一份原始 bytes)。Preview 快取(60 筆)已建好
-但未被任何呼叫端填入,是刻意的範圍控制,不是遺漏——已在程式碼註解與
-decision_log 中說明,避免被誤認為忘記做。
-
-### Verification Result
-PASS — 兩層驗證:
-1. `npm test`:89/89 通過(新增 38 個:page-range 10、lru-cache 7、
-   binary-store 5、sources 16)。
-2. 瀏覽器實測(`node scripts/dev-server.mjs` + Playwright 啟動真實
-   Chromium,開啟 `http://localhost:5173/dev/sources.html`,console 無
-   錯誤):
-   - 上傳合成 3 頁 PDF(A4 / A3 / A4+Rotate90):3 個 Source 正確產生,
-     `naturalWidth/Height` 對第 3 頁(`/Rotate 90`)正確對調為
-     841.89×595.276(§14.3),三者共用同一個 `docId`。
-   - 3 個縮圖與 1 張額外上傳的合成 PNG(400×300 漸層圖)縮圖全部成功
-     render 到 canvas,像素檢查確認非空白(PDF 頁 75/48/130 個非白像素,
-     圖片 30000/30000 全非白,符合各自內容預期);旋轉頁縮圖長寬比正確
-     呈現橫向(200×141)。
-   - `binaryStore`:2 個 doc(PDF+圖片)共 124449 bytes;`openPdfDocs`:1
-     (3 頁共用一份)。
-   - 刪除 3 頁 PDF 中的 1 頁後,`binaryStore`/`openPdfDocs` 皆不變
-     (bytes 與 doc 仍在,因為另外 2 頁還在引用)——確認 docId
-     參照計數正確;點擊「Delete All」後 `binaryStore`/`openPdfDocs`/
-     `thumbnailCache` 全部归零(§23.5.3)。
-   - 頁碼範圍輸入 `2`(只載入第 2 頁):正確只產生 1 個 Source,
-     `pageIndex=1`、尺寸為 A3(841.89×1190.551),確認 §12.2 語法與
-     UI 輸入框正確串接。
-   - 全程無 console error(換用 v5.4.149 之前的版本會在每次
-     `page.render()` 噴 `TypeError`,已在上方 Implementation Details
-     記錄診斷過程)。
-
 ## 2026-08-05 20:15
 
 ### Type
@@ -631,3 +532,107 @@ PASS — two layers:
    automated checks alone had been passing throughout).
 
 ## 2026-08-06 | Docs | Rotated 3 entries (2026-08-05 17:40, 18:15, and the 2026-08-05 first rotation-record) to docs/logs/change_log_2026.md | wc -l verified (631 lines active after rotation)
+
+## 2026-08-06 02:30
+
+### Type
+Feature
+
+### Summary
+Phase 8 Print Path: Crop Marks (§16) drawn into every exported PDF and, per
+§13.1's own requirement, into the Preview canvas too; a standalone 100mm
+Print Calibration Page (§15.3); and the "Print" button, which is not a third
+rendering path — it calls the exact same `exportProjectToPdf()` "Export PDF"
+does, then opens the bytes via the browser's built-in PDF viewer (§15.1).
+
+### Files Changed
+- src/model.js — `createCropMarksSettings()` (new; `enabled`/`lengthPt`/
+  `gapPt`/`lineWidthPt`, defaults not specified by plan.md, see D-017),
+  wired into `createProject().cropMarks`.
+- src/model.test.js — 3 new tests.
+- src/print.js (created) — `computeCropMarksForSlot()`/
+  `cropMarkSegmentsToPdfSpace()` (§16 pure geometry), `computeCalibrationPageContent()`/
+  `exportCalibrationPagePdf()` (§15.3, deps-injected pdfLib, same split as
+  export.js).
+- src/print.test.js (created) — 9 tests.
+- src/print-real-pdf-lib.test.js (created) — 3 guarded tests (A4 page size,
+  the actual drawn square measures exactly 100mm in the real output content
+  stream, text is real selectable Tj/TJ not rasterized).
+- src/export.js — `exportProjectToPdf()` now draws Crop Marks for every Slot
+  on a page (regardless of whether it has a Source) when
+  `state.project.cropMarks.enabled`, via pdf-lib's high-level `page.drawLine()`.
+- src/export.test.js — 3 new tests.
+- src/export-real-pdf-lib.test.js — 1 new guarded test (16 real stroked
+  lines for 2 empty Slots with Crop Marks on).
+- src/preview.js — `renderCropMarks()` (new DOM adapter; §13.1 requires the
+  Preview canvas to show Crop Marks, not just bake them into Export's
+  output — reuses print.js's same `computeCropMarksForSlot()`, content-area-
+  local origin per D-012's established convention).
+- src/reducers.js — `setCropMarksAction()` (new; merges a partial update
+  into `state.project.cropMarks`).
+- src/reducers.test.js — 2 new tests.
+- src/export-adapters.js — `openPdfBytesForPrint()` (new; Blob +
+  `window.open()`, no `window.print()` call — see Implementation Details).
+- dev/print.html (created) — Phase 8 dev harness: Crop Marks controls,
+  Print button, Print Calibration Page button, reusing Phase 7's
+  Export/verify wiring.
+
+### Reason
+Next phase per plan.md §22 after Phase 7 (PDF Export). §15.1 makes printing
+depend on Export already being trustworthy (same rendering path, same
+geometry), so it had to come after Export was proven, not before.
+
+### Implementation Details
+See decision_log D-017 for the four judgment calls: Crop Marks are drawn
+per-Slot (every Slot gets its own cut guides, since this is an imposition
+tool where each Slot is a separate piece to be cut out — not once around
+the sheet's outer edge, the traditional single-page-print convention); the
+Calibration Page is always A4 with ASCII-only English text, independent of
+the current Project's paper settings (it tests the printer/driver itself,
+not the user's layout — and §16 already defers CJK font-subset embedding
+via fontkit to the second stage); Crop Marks are drawn into the Preview
+canvas this same phase rather than deferred, since §13.1 already lists them
+as a required Preview element; and "Print" deliberately does NOT call
+`window.print()` itself — it opens the PDF via the browser's own viewer and
+leaves the actual print trigger to that viewer's own UI, matching §15.1's
+flowchart literally ("由瀏覽器內建 PDF Viewer 列印").
+
+Because "Print" and "Export PDF" are two buttons that each independently
+call the exact same `exportProjectToPdf()`, §23.6.2's "the two produce
+byte-identical PDFs" holds by construction — there is no second rendering
+path to keep in sync. The one caveat: two independent calls carry their own
+wall-clock `/CreationDate`, so a literal byte-for-byte comparison needs that
+one fixed-width metadata field normalized out first (see Verification
+Result) — everything else, including every drawing operator, is identical.
+
+### Impact Analysis
+Phase 9 (Project System) will persist `Project.cropMarks` as part of the
+project JSON like any other Project Setting — no new serialization concern.
+Any future third Source kind or Bleed (§16 [S], second stage) feature must
+revisit Crop Marks' `gapPt` semantics (currently "distance from the Slot
+edge"; Bleed would introduce a distinct "distance from the bleed boundary"
+concept) rather than assuming the current single-gap parameter still
+applies, per D-017's Future Review Conditions.
+
+### Verification Result
+PASS — two layers:
+1. `npm test`: 403/403 passing (21 new: 17 pure/fake-level across print.js,
+   model.js, export.js, reducers.js + 4 real-pdf-lib-level across the new
+   print-real-pdf-lib.test.js and export-real-pdf-lib.test.js; running total
+   382 -> 403).
+2. Browser verification (`node scripts/dev-server.mjs` + Playwright against
+   `http://localhost:5173/dev/print.html`, console clean aside from the
+   browser's own pre-existing `/favicon.ico` 404 — unrelated to this phase,
+   dev-server.mjs has never had a favicon route): Crop Marks OFF by default
+   shows zero `.pl-crop-mark` elements in the Preview DOM; toggling ON shows
+   exactly 32 (4 Slots x 8 segments) for a 4-up template, toggling back OFF
+   removes them; the exported PDF, re-rendered via real pdf.js, shows dark
+   (crop-mark) pixels inside the page margin where no Slot content ever
+   draws; clicking Print opens a genuine new browser tab pointed at a
+   `blob:` URL; Print's and Export's bytes for the same store state are
+   identical once the `/CreationDate` field is normalized out; clicking
+   Print Calibration Page also opens a new tab, and the resulting PDF
+   reloads as a single A4 page whose re-rendered 100mm square measures
+   ~283-284px wide (100mm at pdf.js's 1px-per-pt scale=1 convention).
+
+## 2026-08-06 | Docs | Rotated 1 entry (2026-08-05 19:30, Phase 2 Source Engine) to docs/logs/change_log_2026.md | wc -l verified (636 lines active after rotation)

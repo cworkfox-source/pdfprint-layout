@@ -40,6 +40,7 @@ import {
   effectiveBoundingBox,
   sortByZOrder,
 } from './geometry.js';
+import { computeCropMarksForSlot, cropMarkSegmentsToPdfSpace } from './print.js';
 
 // §14.6 — output MediaBox is the paper size in pt, rounded to 3 decimals
 // only at this PDF-writing boundary (geometry.js's own convention, §6.1).
@@ -318,6 +319,29 @@ export async function exportProjectToPdf(state, deps) {
         pdfLib.drawObject(xObjectKey),
         pdfLib.popGraphicsState(),
       );
+    }
+
+    // §16 Crop Marks — drawn for EVERY Slot on the page (not just ones with
+    // a Source), since these mark physical cut lines for the printed sheet
+    // itself, independent of whether a given Slot has content yet (decision_
+    // log D-017). Uses pdf-lib's high-level drawLine() rather than the raw
+    // operators above: unlike XObject placement (computeXObjectDrawMatrix's
+    // whole reason for existing), a straight, unrotated, axis-aligned line
+    // has no matrix-decomposition ambiguity for drawLine() to get wrong.
+    if (state.project.cropMarks?.enabled) {
+      const { lineWidthPt } = state.project.cropMarks;
+      for (const slot of page.slots) {
+        const slotAbsRectPt = computeSlotAbsoluteRectPt(slot, contentAreaPt);
+        const segments = cropMarkSegmentsToPdfSpace(computeCropMarksForSlot(slotAbsRectPt, state.project.cropMarks), height);
+        for (const seg of segments) {
+          outPage.drawLine({
+            start: { x: seg.x1, y: seg.y1 },
+            end: { x: seg.x2, y: seg.y2 },
+            thickness: lineWidthPt,
+            color: pdfLib.rgb(0, 0, 0),
+          });
+        }
+      }
     }
   }
 
