@@ -3,3 +3,8 @@ dist/
 *.log
 .DS_Store
 Thumbs.db
+
+# AI agent governance rule files — kept locally, not published (user request 2026-08-05)
+/AGENTS.md
+/CLAUDE.md
+/.antigravity_rules.md
