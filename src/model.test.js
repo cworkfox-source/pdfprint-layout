@@ -22,7 +22,13 @@ test('createSource requires a kind and fills defaults', () => {
   assert.equal(src.fileName, 'photo.png');
   assert.equal(src.pageRotate, 0);
   assert.equal(src.cropBox, null);
+  assert.equal(src.contentHash, null);
   assert.match(src.id, /^src-/);
+});
+
+test('createSource accepts a contentHash override (§17.1 relink metadata)', () => {
+  const src = createSource({ kind: 'image', contentHash: 'abc123' });
+  assert.equal(src.contentHash, 'abc123');
 });
 
 test('createSlot has the exact defaults from plan.md §5.3', () => {

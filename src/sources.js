@@ -15,6 +15,11 @@ import { createSource } from './model.js';
 import { normalizeSourceDimensions } from './geometry.js';
 import { parsePageRange } from './page-range.js';
 import { createLruCache } from './lru-cache.js';
+// computeContentHash (§17.1) is a converged Web Crypto call, same as
+// `file.arrayBuffer()` a few lines below — called directly rather than
+// injected, for the same reason: it needs no environment-specific fake to
+// be Node-testable (decision_log D-018).
+import { computeContentHash } from './hash.js';
 
 // §12.5 thresholds — named here so both the engine defaults and tests
 // reference the one place these numbers live, per plan.md's table.
@@ -284,6 +289,9 @@ export function createSourceEngine(deps = {}) {
     const originalBuffer = await file.arrayBuffer();
     const docId = makeDocId();
     binaryStore.put(docId, originalBuffer);
+    // §17.1 — one hash per FILE (docId), not per page; every page-Source
+    // sharing this docId gets the same value below.
+    const contentHash = await computeContentHash(originalBuffer);
 
     const previewCopy = binaryStore.getCopyForPdfJs(docId);
     const loadingTask = pdfjsLib.getDocument({ data: previewCopy });
@@ -317,6 +325,7 @@ export function createSourceEngine(deps = {}) {
         cropBox: box,
         mediaBox: box,
         docId,
+        contentHash,
       });
       sources.push(source);
       retainDoc(docId);
@@ -337,6 +346,7 @@ export function createSourceEngine(deps = {}) {
     const originalBuffer = await file.arrayBuffer();
     const docId = makeDocId(); // 1:1 file-to-source, but still routed through the same store/ref-count machinery as PDFs
     binaryStore.put(docId, originalBuffer);
+    const contentHash = await computeContentHash(originalBuffer);
 
     const decoded = await decodeImage(file);
     const source = createSource({
@@ -345,6 +355,7 @@ export function createSourceEngine(deps = {}) {
       naturalWidth: decoded.width,
       naturalHeight: decoded.height,
       docId,
+      contentHash,
     });
     retainDoc(docId);
     enqueueThumbnail(source.id, () =>

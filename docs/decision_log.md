@@ -1237,3 +1237,166 @@ B 案額外呼叫 `window.print()` 在多數瀏覽器對一個剛用 `window.ope
 參數形狀繼續適用。若使用者明確要求校正頁改用中文說明文字,需要一併評估
 引入 `fontkit` 的打包體積代價,而不是繞過 §16 已記錄的「第二階段議題」
 自行決定。
+
+## D-018 — Phase 9 Project System:project.json 信封格式、schemaVersion 遲到的版本號提升、來源重新比對(relink)策略、Template 套用語意、專案載入重置 History 而非走 reducer
+
+### Date
+2026-08-06
+
+### Topic
+架構 / 資料格式 / 產品範圍
+
+### Context
+實作 Phase 9(plan.md §17 專案與模板)時遇到五個 plan.md 未明訂、或實作
+過程中才發現的缺口:
+
+1. §17.1 只列出 project.json 必須包含的欄位清單(Project Settings、
+   Paper、Pages、Slots、Transforms、Template 參照、Source Metadata),未
+   規定實際 JSON 信封的巢狀結構,也未明訂 `AppState.selection`(純 UI
+   狀態)是否要存檔。
+2. 檢查後發現 Phase 8 為 `Project` 新增 `cropMarks` 欄位時,`SCHEMA_VERSION`
+   常數仍停在 1 沒有跟著提升——這正是 §17.2「不得靜默忽略未知欄位」要
+   防範的那種情況本身:同一個版本號底下,Project 的實際形狀已經悄悄變了。
+3. §17.1 明訂「Source 二進位不內嵌…載入時若找不到來源,提示使用者重新
+   指定原始 PDF/圖片,並以檔名＋頁數＋尺寸比對」,但沒有規定：當兩份
+   候選檔案的檔名/頁數/尺寸都相同時(例如同名但內容不同的檔案覆蓋)要
+   如何進一步分辨,也沒有規定重新載入後 Slot 對 Source 的參照(id)如何
+   維持有效。
+4. §17.3 只說 Template 保存 Paper/Margins/Slots,未規定「套用」一個
+   Template 到既有頁面時,是與該頁現有內容合併,還是整段取代。
+5. 檢查 `AppState.templates` 的實際使用狀況,發現自 Phase 0 至今從未有
+   任何 reducer 寫入過它(`createAppState()` 只是把它預設成 `[]`)——與
+   D-015 發現的 `AppState.sources` 缺口是同一類問題(資料模型欄位存在,
+   但沒有任何寫入路徑)。另外,Undo/Redo 本身(store.js)自 Phase 4 起已
+   實作並持續被使用,但「載入一個全新專案」這個動作該不該進入現有的
+   Undo 歷史,plan.md 也未提及。
+
+### Alternatives Considered
+(1) project.json 信封格式:
+  A. `{ schemaVersion, project, sources, templates, pages }`——
+     `schemaVersion` 提升到最外層(唯一版本標記),`project` 物件本身不再
+     重複帶自己的 `schemaVersion`(避免兩份版本號不同步);`selection`
+     完全不存檔(比照 §7.3 排除 Zoom/Pan/選取進入 History 的同一個理由:
+     純 UI 狀態,存檔沒有意義)。
+  B. 直接把整個 `AppState`(含 `selection`)原樣 `JSON.stringify()`,
+     `schemaVersion` 留在 `project.schemaVersion` 巢狀欄位裡,不額外提到
+     最外層。
+
+(2) SCHEMA_VERSION 遲到的提升:
+  A. 現在補上:`SCHEMA_VERSION` 1→2,並撰寫 v1→v2 migration(補上
+     `cropMarks` 預設值),當作「這個缺口本來就該在 Phase 8 做,現在
+     補齊」處理,而非留到日後某次真正的 v3 才一次跳兩版。
+  B. 維持 `SCHEMA_VERSION = 1` 不變,假裝 Phase 8 沒有讓 Project 形狀
+     變過。
+
+(3) Source relink 比對策略:
+  A. 依「檔名 + 頁碼(pdf-page 專屬)+ 尺寸」比對候選,若儲存值與新載入
+     值**兩邊都有** `contentHash`(§17.1 的「雜湊」欄位,Phase 9 新增,
+     src/hash.js 用 Web Crypto `SHA-256`,瀏覽器與 Node 收斂為同一份原生
+     API,不需要 deps 注入)則以雜湊作為最終判準——雜湊不符時即使檔名/
+     頁碼/尺寸都吻合也視為不同檔案,拒絕比對;任一邊缺雜湊時退回只用
+     檔名+頁碼+尺寸。重新比對成功後,保留「已存檔」那筆 Source 的原始
+     `id`(讓 Slot.sourceId 參照持續有效),只把它的 `docId` 換成新載入
+     檔案的 `docId`。
+  B. 只比對檔名+頁碼+尺寸,不計算/不使用雜湊。
+  C. 重新載入後產生全新的 Source id,並回頭改寫每個 Page 的每個 Slot
+     的 `sourceId` 讓它們指向新 id。
+
+(4) Template 套用語意:
+  A. 整段取代(套用時同時替換 Page 的 `paper` 與 `slots`,清空該頁原有
+     的所有內容指派),與 D-014 Auto Fill「整段取代模板頁」的既有先例
+     一致;Slot id 全部重新產生(同一份 `duplicatePage()` 已用過的
+     `createSlot({ ...slot, id: undefined })` 模式),避免同一個 Template
+     被套用兩次時 id 互相碰撞。
+  B. 與既有內容合併(只換 Paper/Slot 版型,盡量保留已指派的 Source)。
+
+(5-a) AppState.templates 缺口:
+  A. 補上 `saveTemplateAction()`/`deleteTemplateAction()`/
+     `applyTemplateAction()` 三個 reducer,走既有 `store.commit()` 路徑,
+     與 D-015 修 `AppState.sources` 缺口時的做法一致。
+  B. 略過不修,留待更後面的 Phase。
+
+(5-b) 「載入專案」是否進入 Undo 歷史:
+  A. 新增 `store.resetWithState(newState)`,獨立於 `commit(reducer,
+     action)` 之外:直接替換 `current`,同時清空 `past`/`future`/
+     `pendingCoalesceKey`。載入一個(可能完全不相關的)專案是一次「情境
+     切換」,不是從目前狀態衍生出的一次編輯,不應該讓 Undo 能夠「跳出」
+     這次載入、回到另一個專案自己的編輯歷史裡。
+  B. 把「載入專案」包成一個一般的 `loadProjectAction(newState)` reducer,
+     透過 `store.commit()` 派送,讓它跟其他編輯一樣進入 Undo 歷史。
+
+### Selected Solution
+(1) A。(2) A。(3) A。(4) A。(5-a) A。(5-b) A。
+
+### Reason
+(1)A 案讓「版本號」只有一個位置需要檢查與提升,B 案的巢狀
+`project.schemaVersion` 若未來又要在最外層加別的檔案層級中繼資料(例如
+匯出時間戳、應用程式版本字串),會缺一個自然的容身之處,且巢狀版本號
+容易在只改了外層的情況下被忘記同步。
+(2)A 案的理由就是 Context 裡描述的那個情況本身——不補的話,§17.2
+「必須含 schemaVersion」與「不得靜默忽略未知欄位」這兩條 [M] 驗收條件,
+對「Phase 8 之後才存的專案」與「Phase 8 之前存的專案」其實已經名不副實
+(兩者版本號相同但形狀不同),這正是版本欄位存在的意義被架空的實例;
+B 案等於讓這個落差繼續存在,只是換了個方式視而不見。
+(3)A 案是唯一同時滿足 plan.md 明文要求的「檔名＋頁數＋尺寸」比對與其
+明文要求的「雜湊」兩者的做法,雜湊在兩邊都有時優先(也是唯一真正能
+分辨「同名同尺寸但內容不同」這種情況的信號),但不強制要求(舊專案
+存檔於 contentHash 加入之前,或某些歷史檔案可能缺這個欄位,不能因此
+直接判定為不比對);B 案沒有用到 plan.md 明確點名的雜湊,遇到同名同尺寸
+的不同檔案時無法分辨;C 案技術上可行,但意味著載入一個大型專案時要
+遍歷並改寫每個 Page 底下每個 Slot 的 `sourceId`,比起「保留舊 id、只換
+docId」複雜且容易在某個巢狀層級漏改,A 案讓 Slot 完全不需要知道
+relink 這件事發生過。
+(4)A 案與 D-014 已建立的「Auto Fill 整段取代模板頁」先例一致,使用者
+心智模型統一(套用一個現成版型 = 用它換掉目前這頁,不是疊加);B 案的
+「合併」語意含糊(哪些 Slot 該保留?依什麼規則配對新舊 Slot?),
+plan.md 完全沒有給出可據以實作的規則,勉強決定等於是自己發明一整套
+未經驗證的合併演算法。
+(5-a)A 案理由與 D-015 完全相同:這是資料模型已經存在、卻沒有任何寫入
+路徑的真實缺口,不是假設性的。
+(5-b)A 案符合直覺的使用者心智模型(開啟另一個專案檔案,不應該還能
+「復原」回到前一個開啟中的專案),也避免 Undo 歷史裡累積一份完全無關
+專案的大型 snapshot(上限 50 步,可能因此浪費可觀記憶體);B 案技術上
+可行(`commit()` 本身足夠通用,一個忽略舊 state、直接回傳新 state 的
+reducer 就能做到),但沒有任何好處抵銷「使用者可以 Undo 回到另一個
+專案」這個令人困惑的副作用。
+
+### Consequences
+- `src/model.js`:`SCHEMA_VERSION` 1→2;`createSource()` 新增
+  `contentHash` 欄位(預設 `null`)。
+- `src/hash.js`(新增)——`computeContentHash(bytes)`,直接呼叫
+  `crypto.subtle.digest('SHA-256', ...)`,不需要 deps 注入(這是本專案
+  第一個「第三方能力邊界」檔案不需要注入/adapter 分層的案例,因為
+  Web Crypto 是瀏覽器與 Node 收斂為同一份 API 的少數例外,已直接在
+  這個 Node 版本驗證過)。
+- `src/sources.js`:`loadPdfFile()`/`loadImageFile()` 各自對整份原始
+  bytes 算一次 hash(同一 docId 的所有頁共用同一個值),寫入每個
+  Source 的 `contentHash`。
+- `src/project-file.js`(新增)——`serializeProject()`(輸出上述信封
+  格式)、`migrateProjectData()`(v1→v2,補上 `cropMarks` 預設值,拒絕
+  比目前 app 支援版本更新的檔案)、`deserializeProject()`(migration +
+  透過 `createSource()`/`createTemplate()` 重新驗證,遇到損毀資料——例如
+  Template 缺少必填的 `name`——直接拋錯而非靜默接受)、`relinkSources()`
+  (依檔名+頁碼+尺寸+雜湊比對,保留舊 id、換新 docId)、
+  `findMissingSourceIds()`(供 UI 提示用)。
+- `src/pages.js`:`applyTemplateToPage(page, template)`——整段取代
+  paper+slots,slot id 全部重新產生。
+- `src/reducers.js` 新增 `saveTemplateAction()`/`deleteTemplateAction()`/
+  `applyTemplateAction()`。
+- `src/store.js` 新增 `resetWithState(newState)`——替換 state 並清空
+  `past`/`future`/`pendingCoalesceKey`,獨立於 `commit()` 之外,是 Phase 9
+  才需要的第二種「改變目前狀態」入口(仍是唯一由 `store.js` 自己管控的
+  入口,§7.1 精神不變——外部依然不能繞過 store 直接改物件)。
+- `src/project-adapters.js`(新增)——`downloadProjectJson()`/
+  `readProjectFile()`,瀏覽器限定的薄 DOM 層,同 `export-adapters.js`
+  的分層慣例,無對應單元測試。
+- `dev/project.html`(新增)——Phase 9 dev harness:Save Project、Load
+  Project(含「請重新選取來源檔案」的第二階段流程)、Save as Template、
+  Apply Template、Undo/Redo 按鈕與 history 狀態顯示。
+
+### Future Review Conditions
+若 Slot 或 Page 未來新增欄位(目前自 Phase 0 起兩者形狀都沒變過),
+`migrateProjectData()`/`deserializeProject()` 需要往下深入 pages/slots
+層級做欄位遷移,不能假設只有 `project` 物件會變。若日後真的需要「合併」
+語意的 Template 套用(而非整段取代),需要先有一個明確的配對規則來源
+(例如依 Slot 在陣列中的位置配對),不能沿用 D-014 的複製取代前例硬套。

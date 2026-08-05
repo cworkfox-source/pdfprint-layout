@@ -68,6 +68,22 @@ export function createStore(initialState) {
     pendingCoalesceKey = null;
   }
 
+  // Phase 9 (§17.1 Project load) — a full state REPLACEMENT, not a derived
+  // edit: loading a different project is a context switch, not something
+  // Undo should be able to step back out of into a completely unrelated
+  // project's own history (and retaining that history would waste up to
+  // HISTORY_LIMIT large snapshots for no benefit). Deliberately separate
+  // from commit(reducer, action) rather than a `loadProjectAction` reducer
+  // dispatched through it — see decision_log D-018.
+  function resetWithState(newState) {
+    current = deepFreeze(newState);
+    past = [];
+    future = [];
+    pendingCoalesceKey = null;
+    notify();
+    return current;
+  }
+
   function undo() {
     if (past.length === 0) return current;
     future.push(current);
@@ -98,7 +114,7 @@ export function createStore(initialState) {
     return { past: past.length, future: future.length };
   }
 
-  return { getState, subscribe, commit, endCoalescing, undo, redo, canUndo, canRedo, historyDepth };
+  return { getState, subscribe, commit, endCoalescing, resetWithState, undo, redo, canUndo, canRedo, historyDepth };
 }
 
 // Recursively freezes the whole state tree so any mutation attempt from

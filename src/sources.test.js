@@ -160,6 +160,9 @@ test('loadPdfFile creates one Source per page, all pages by default', async () =
   assert.equal(sources[0].fileName, 'drawing.pdf');
   assert.ok(sources[0].docId);
   assert.equal(sources[0].docId, sources[1].docId); // one file -> shared docId
+  // §17.1 — one hash per FILE, shared by every page-Source from it.
+  assert.match(sources[0].contentHash, /^[0-9a-f]{64}$/);
+  assert.equal(sources[0].contentHash, sources[1].contentHash);
 
   await engine.waitForAllThumbnails();
   assert.equal(thumb.calls.length, 2);
@@ -285,6 +288,7 @@ test('loadImageFile creates one Source, stores original bytes, and renders a thu
   assert.equal(source.naturalHeight, 600);
   assert.equal(binaryStore.size(), 1);
   assert.ok(binaryStore.has(source.docId));
+  assert.match(source.contentHash, /^[0-9a-f]{64}$/);
 
   await engine.waitForThumbnail(source.id);
   assert.equal(rendered.length, 1);

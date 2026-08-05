@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore } from './store.js';
-import { createAppState, createPage, createSlot, createSource } from './model.js';
+import { createAppState, createPage, createSlot, createSource, createTemplate } from './model.js';
 import {
   setPageSlotsAction,
   moveSlotsAction,
@@ -33,6 +33,9 @@ import {
   addSourceAction,
   removeSourceAction,
   setCropMarksAction,
+  saveTemplateAction,
+  deleteTemplateAction,
+  applyTemplateAction,
 } from './reducers.js';
 
 function makeTwoPageState() {
@@ -369,4 +372,41 @@ test('setCropMarksAction can update multiple fields at once', () => {
   const store = createStore(makeTwoPageState());
   store.commit(setCropMarksAction({ enabled: true, lengthPt: 20, gapPt: 10, lineWidthPt: 1 }), null);
   assert.deepEqual(store.getState().project.cropMarks, { enabled: true, lengthPt: 20, gapPt: 10, lineWidthPt: 1 });
+});
+
+// --- Templates (§17.3, Phase 9 — gap found the same way D-016 found the
+// AppState.sources gap: nothing had ever written to AppState.templates) ---
+
+test('saveTemplateAction appends a Template to AppState.templates', () => {
+  const store = createStore(makeTwoPageState());
+  const template = createTemplate({ name: 'A4_2up', slots: [createSlot()] });
+  store.commit(saveTemplateAction(template), null);
+  assert.deepEqual(store.getState().templates, [template]);
+});
+
+test('deleteTemplateAction removes a Template by id, leaving others untouched', () => {
+  const store = createStore(makeTwoPageState());
+  const a = createTemplate({ id: 'tmpl-a', name: 'A', slots: [] });
+  const b = createTemplate({ id: 'tmpl-b', name: 'B', slots: [] });
+  store.commit(saveTemplateAction(a), null);
+  store.commit(saveTemplateAction(b), null);
+  store.commit(deleteTemplateAction('tmpl-a'), null);
+  assert.deepEqual(store.getState().templates, [b]);
+});
+
+test('applyTemplateAction replaces only the targeted page\'s paper+slots, other pages untouched', () => {
+  const store = createStore(makeTwoPageState());
+  const template = createTemplate({ name: 't', slots: [createSlot({ x: 0, y: 0, w: 1, h: 0.5 }), createSlot({ x: 0, y: 0.5, w: 1, h: 0.5 })] });
+  store.commit(applyTemplateAction('page-a', template), null);
+
+  const state = store.getState();
+  assert.equal(state.pages[0].slots.length, 2); // page-a replaced
+  assert.equal(state.pages[1].slots.length, 1); // page-b untouched
+  assert.equal(state.pages[1].slots[0].id, 'b1');
+});
+
+test('applyTemplateAction throws for an unknown pageId', () => {
+  const store = createStore(makeTwoPageState());
+  const template = createTemplate({ name: 't', slots: [] });
+  assert.throws(() => store.commit(applyTemplateAction('missing-page', template), null), /No page with id/);
 });

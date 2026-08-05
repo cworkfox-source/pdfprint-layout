@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createPage, createSlot } from './model.js';
-import { addPage, deletePage, duplicatePage, movePage } from './pages.js';
+import { createPage, createSlot, createTemplate, createPaperSettings } from './model.js';
+import { addPage, deletePage, duplicatePage, movePage, applyTemplateToPage } from './pages.js';
 
 function pagesOf(ids) {
   return ids.map((id) => createPage({ id }));
@@ -87,4 +87,32 @@ test('movePage clamps an out-of-range target index instead of throwing', () => {
 
 test('movePage throws for an unknown id', () => {
   assert.throws(() => movePage(pagesOf(['a']), 'missing', 0), /no page with id/);
+});
+
+// --- applyTemplateToPage (§17.3, Phase 9) -----------------------------------
+
+test('applyTemplateToPage replaces BOTH paper and slots wholesale', () => {
+  const page = createPage({ paper: createPaperSettings({ size: 'A4' }), slots: [createSlot({ sourceId: 'old-src', x: 0.9, y: 0.9 })] });
+  const template = createTemplate({ name: 'A3_2up', paper: createPaperSettings({ size: 'A3' }), slots: [createSlot({ x: 0, y: 0, w: 1, h: 0.5 }), createSlot({ x: 0, y: 0.5, w: 1, h: 0.5 })] });
+
+  const result = applyTemplateToPage(page, template);
+  assert.equal(result.paper.size, 'A3');
+  assert.equal(result.slots.length, 2);
+  assert.equal(result.slots[0].w, 1);
+  assert.equal(result.slots[0].h, 0.5);
+});
+
+test('applyTemplateToPage clears any existing Source content — Templates never carry sourceId', () => {
+  const page = createPage({ slots: [createSlot({ sourceId: 'old-src' })] });
+  const template = createTemplate({ name: 'blank', slots: [createSlot()] });
+  const result = applyTemplateToPage(page, template);
+  assert.equal(result.slots[0].sourceId, null);
+});
+
+test('applyTemplateToPage regenerates Slot ids (applying the same Template twice must not collide)', () => {
+  const template = createTemplate({ name: 't', slots: [createSlot({ id: 'template-slot-1' })] });
+  const pageA = applyTemplateToPage(createPage(), template);
+  const pageB = applyTemplateToPage(createPage(), template);
+  assert.notEqual(pageA.slots[0].id, 'template-slot-1');
+  assert.notEqual(pageA.slots[0].id, pageB.slots[0].id);
 });

@@ -543,3 +543,79 @@ PASS — 兩層驗證:
      `page.render()` 噴 `TypeError`,已在上方 Implementation Details
      記錄診斷過程)。
 
+
+## 2026-08-05 20:15
+
+### Type
+Feature
+
+### Summary
+完成 Phase 3 Layout Engine:`src/layout.js`(§9.1 preset 版型 + §9.2 自訂
+Grid 的純幾何產生器)、`src/preview.js` 新增 Slot 繪製(`computeSlotPx()`/
+`renderSlots()`)、`dev/layout.html` dev harness。23 個新單元測試
+(共 112 個)+ 真實瀏覽器(Playwright)逐一驗證全部 14 個 preset 的實際
+`getBoundingClientRect()` 與 model 換算值完全吻合。
+
+### Files Changed
+- src/layout.js、src/layout.test.js(新增)
+- src/preview.js — 新增 `computeSlotPx()`、`renderSlots()`;新增 import
+  `sortByZOrder`(geometry.js)
+- src/preview.test.js — 新增 2 個 `computeSlotPx` 測試
+- dev/layout.html(新增)— Phase 3 dev harness,非產品 UI
+- docs/decision_log.md — 新增 D-010(非對稱 preset 列/欄權重假設、
+  「2+2」preset 不實作的理由)
+- docs/project_status.md — TL;DR、Completed/In Development/Known Issues
+  更新
+
+### Reason
+延續 Phase 2 完成後的下一步(plan.md §22:Layout Engine 在 Source Engine
+之後)。§9.1 明訂 MVP 必備 preset 清單(1/2/4/6/9-up、上2下1、上1下2),
+§9.2 要求自訂 Grid,兩者都需要一個能從「內容區尺寸 + Gap 設定」算出
+Normalized Slot 座標的純函式核心,才能讓 Phase 4(自由版型)在同一份資料
+結構上疊加編輯能力,而不必重寫。
+
+### Implementation Details
+`src/layout.js` 只有一個真正的幾何原語:`splitAxis(sizePt, gapPt,
+weights)`——把一段長度依權重比例切成 N 段、扣除 (N-1) 個 gap,回傳已經是
+0..1 正規化的 `{start, size}`。§9.1 的均勻 grid(1/2/4/6/9/16-up)與 §9.2
+的自訂 Grid 是同一個 `generateGridSlots()`,差別只在 rows/cols 是常數還是
+使用者輸入。上2下1/上1下2/左1右2/左2右1(以及 [S] 的「3+1」「1+3」,對應
+`generateTopBottomSplit`/`generateLeftRightSplit` 的參數化版本)則是先把
+主軸(上下或左右)二等分,再對其中一段依格數均分——這個「二等分」是 Phase 3
+本身要填的假設,§9.1 的 ASCII 圖沒有文字明確規定,已記入 decision_log
+D-010,連同「2+2」preset 因語意不明而不實作的理由。
+
+`preview.js` 新增的 `computeSlotPx()`/`renderSlots()` 延續 Phase 1 建立的
+「純計算 vs DOM adapter」分離:前者把 Slot 的 Normalized 值換算成
+content-area 相對的 preview px(純函式,可測);後者只負責把換算好的數字
+寫進 DOM,並在繪製時呼叫 `geometry.js` 既有但至今未被任何 renderer 實際
+使用過的 `sortByZOrder()`(§6.5)——這是它第一次真正派上用場,也讓
+「Preview 與 Export 用同一份排序函式」不再只是文件承諾。
+
+### Impact Analysis
+Phase 3 的產出(`generatePresetSlots()`/`generateGridSlots()`/
+`createSlotsFromRects()`)是 Phase 4 自由版型編輯(拖曳/縮放/分割/合併)
+與 Phase 17 Template 儲存的共同基礎——兩者都直接操作這裡產生的 Slot
+陣列,不需要另一套資料轉換。`renderSlots()` 也是 Phase 5(Source
+Placement)畫出實際內容前,Slot 外框本身就能先被看見與互動的前提。
+
+### Verification Result
+PASS — 兩層驗證:
+1. `npm test`:112/112 通過(新增 23 個:layout.js 21、preview.js
+   computeSlotPx 2)。
+2. 瀏覽器實測(`node scripts/dev-server.mjs` + Playwright 啟動真實
+   Chromium,開啟 `http://localhost:5173/dev/layout.html`,console 無
+   錯誤):
+   - 逐一套用全部 14 個 preset(1up/2up-h/2up-v/4up/6up-2x3/6up-3x2/
+     9up/16up/top2-bottom1/top1-bottom2/left1-right2/left2-right1/
+     top3-bottom1/top1-bottom3):每個 Slot 的實際
+     `getBoundingClientRect()`(扣除 content-area 偏移後)與 model 的
+     normalized 值乘以 `contentAreaPx` 算出的期望值比較,容許
+     1.5px 次像素誤差,**全部 0 mismatch**。
+   - §9.2 自訂 Grid 輸入 3×5:正確產生 15 個 Slot。
+   - 切換 Orientation 後重新套用不報錯,Slot 數量不變(模型本身不因
+     Orientation 改變而自動變動,需使用者手動重新套用 preset,符合
+     §8.2 的既定行為)。
+   - Gap H/V 改為 20pt 後重新套用 4-up:算出的 normalized 值與手算公式
+     `(內容區長度 - gap) / 2 / 內容區長度` 相符。
+

@@ -38,7 +38,7 @@ import {
   clearSlotContent,
 } from './slot-content.js';
 import { applyFillRule, generateAutoFillPageObjects } from './auto-fill.js';
-import { addPage, deletePage, duplicatePage, movePage } from './pages.js';
+import { addPage, deletePage, duplicatePage, movePage, applyTemplateToPage } from './pages.js';
 
 function updatePageSlots(state, pageId, updateFn) {
   const pageIndex = state.pages.findIndex((p) => p.id === pageId);
@@ -216,4 +216,26 @@ export function setCropMarksAction(overrides) {
     ...state,
     project: { ...state.project, cropMarks: { ...state.project.cropMarks, ...overrides } },
   });
+}
+
+// §17.3 Layout Template management (Phase 9) — no reducer had ever written
+// to AppState.templates since Phase 0 (createAppState() defaults it to
+// `[]` and nothing ever appended); the exact same class of gap Phase 7
+// found for AppState.sources. See decision_log D-018.
+export function saveTemplateAction(template) {
+  return (state) => ({ ...state, templates: [...state.templates, template] });
+}
+
+export function deleteTemplateAction(templateId) {
+  return (state) => ({ ...state, templates: state.templates.filter((t) => t.id !== templateId) });
+}
+
+export function applyTemplateAction(pageId, template) {
+  return (state) => {
+    const pageIndex = state.pages.findIndex((p) => p.id === pageId);
+    if (pageIndex === -1) throw new Error(`No page with id ${pageId}`);
+    const pages = state.pages.slice();
+    pages[pageIndex] = applyTemplateToPage(pages[pageIndex], template);
+    return { ...state, pages };
+  };
 }

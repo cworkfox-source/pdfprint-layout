@@ -5,7 +5,11 @@
 
 import { paperSizePt, mmToPt } from './geometry.js';
 
-export const SCHEMA_VERSION = 1;
+// v1 -> v2: Project gained `cropMarks` (Phase 8, §16) — bumped here because
+// that addition shipped without a version bump at the time, which is
+// exactly the "silently changed shape under the same version number" §17.2
+// warns against. See decision_log D-018 and project-file.js's migration.
+export const SCHEMA_VERSION = 2;
 
 function makeId(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -35,6 +39,13 @@ export function createSource(overrides = {}) {
     // docId (one set of original bytes per file, not per page); an
     // image Source's docId is its own id (1:1 file-to-source).
     docId: overrides.docId ?? null,
+    // §17.1 Source Metadata's "雜湊" (hash) field — a SHA-256 hex digest of
+    // the ORIGINAL FILE's bytes (src/hash.js), computed once at load time
+    // and saved in the project JSON (never the bytes themselves, per
+    // §17.1's "Source 二進位不內嵌"). Used on project reload to confirm a
+    // user-reselected file is really the same one, not just a same-named/
+    // same-sized coincidence (Phase 9, decision_log D-018).
+    contentHash: overrides.contentHash ?? null,
   };
 }
 

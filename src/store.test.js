@@ -146,3 +146,35 @@ test('a throwing reducer leaves history completely untouched (regression: valida
   store.undo();
   assert.equal(store.getState().count, 1); // one real undo step, not two
 });
+
+test('resetWithState() replaces the state and clears BOTH the past and future stacks (Phase 9 project load)', () => {
+  const store = createStore({ count: 0 });
+  store.commit(setCount(1), null);
+  store.commit(setCount(2), null);
+  store.undo(); // count=1, future now has one entry (count=2)
+  assert.deepEqual(store.historyDepth(), { past: 1, future: 1 });
+
+  store.resetWithState({ count: 999 });
+  assert.equal(store.getState().count, 999);
+  assert.deepEqual(store.historyDepth(), { past: 0, future: 0 });
+  assert.equal(store.canUndo(), false);
+  assert.equal(store.canRedo(), false);
+});
+
+test('resetWithState() also ends any in-progress coalescing group', () => {
+  const store = createStore({ count: 0 });
+  store.commit(setCount(1), null, { coalesceKey: 'drag' });
+  store.resetWithState({ count: 0 });
+  // a later commit with the SAME coalesceKey must start a fresh undo step,
+  // not silently merge into whatever came before resetWithState().
+  store.commit(setCount(5), null, { coalesceKey: 'drag' });
+  store.commit(setCount(6), null, { coalesceKey: 'drag' });
+  assert.equal(store.historyDepth().past, 1); // one step, the coalesced (5,6) commit — not merged with pre-reset history
+});
+
+test('resetWithState() freezes the new state just like commit() does', () => {
+  'use strict';
+  const store = createStore({ count: 0 });
+  store.resetWithState({ items: [1, 2] });
+  assert.throws(() => { store.getState().items.push(3); });
+});

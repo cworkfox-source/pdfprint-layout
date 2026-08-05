@@ -2,20 +2,21 @@
 
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
 Visual Page Imposition Designer,public repo
-https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-8 已完成**
+https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-9 已完成**
 (引擎層:geometry/store/model、Source Engine、Layout Engine、Free Layout
-Designer、Source Placement、Auto Imposition、PDF Export〔pdf-lib 輸出,
-§23.3 等價性 104 案例證實,修正 D-016 XObject 座標系 bug〕、**Print
-Path**〔列印與匯出共用 `exportProjectToPdf()`、Crop Marks、100mm 列印
-校正頁,見 D-017〕,403 個單元測試 + 瀏覽器實測皆通過)。下一步:Phase 9
-Project System(存檔/讀檔、Template、Undo/Redo 驗收、schemaVersion
-migration)。無 blocker。
+Designer、Source Placement、Auto Imposition、PDF Export、Print Path、
+**Project System**〔存/讀 `.json`、雜湊比對 relink 來源、Template 存/套用、
+schemaVersion migration、載入專案重置 Undo 歷史,見 D-018〕,437 個單元
+測試 + 瀏覽器實測(完整存檔→重新載入→重新選取來源→relink→續編輯
+往返)皆通過)。下一步:Phase 10(Print Aids 進階與第二階段功能)。無
+blocker。
 
 ## Current Version
-Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 8 完成
+Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 9 完成
 (含 Phase 4 遺留的鎖定/解鎖、Z-order [M] 缺口補完見 D-013、
 AppState.sources 從未被寫入的缺口補完見 D-015、Crop Marks 預設值與繪製
-範圍見 D-017;無產品 UI,僅引擎與 dev 檢查頁)
+範圍見 D-017、AppState.templates 從未被寫入的缺口 + SCHEMA_VERSION 遲到
+提升見 D-018;無產品 UI,僅引擎與 dev 檢查頁)
 
 ## Project Goals
 純前端、零後端、可離線、可打包為單一 HTML 的視覺化拼版工具。使用者載入 PDF 或
@@ -347,15 +348,62 @@ AppState.sources 從未被寫入的缺口補完見 D-015、Crop Marks 預設值�
     渲染的畫布上量得約 283–284px,與換算值吻合)全數通過,console 無
     錯誤。
 
+- Phase 9 Project System(2026-08-06):
+  - `src/model.js` — `SCHEMA_VERSION` 1→2(補上 Phase 8 遺漏的版本號提升,
+    見 decision_log D-018)、`createSource()` 新增 `contentHash` 欄位
+    (§17.1「雜湊」metadata)。
+  - `src/hash.js`(新增)— `computeContentHash(bytes)`,直接呼叫
+    `crypto.subtle.digest('SHA-256', ...)`(Web Crypto 是瀏覽器與 Node
+    收斂為同一份原生 API 的例外案例,不需要像 pdf.js/pdf-lib 那樣做
+    deps 注入或 vendor 抓取)。
+  - `src/sources.js` — `loadPdfFile()`/`loadImageFile()` 對每份原始檔案
+    的 bytes 各算一次 hash,寫入所有共用同一 docId 的 Source。
+  - `src/project-file.js`(新增)— `serializeProject()`(輸出
+    `{schemaVersion, project, sources, templates, pages}` 信封,
+    `selection` 不存檔)、`migrateProjectData()`(v1→v2 補上 `cropMarks`
+    預設值;拒絕比目前 app 版本更新的檔案,§17.2)、`deserializeProject()`
+    (migration 後透過 `createSource()`/`createTemplate()` 重新驗證)、
+    `relinkSources()`(§17.1 relink:依檔名+頁碼+尺寸+雜湊比對,雜湊
+    兩邊都有時優先且不符即拒絕比對,保留舊 id、只換新 docId)、
+    `findMissingSourceIds()`。
+  - `src/pages.js` 新增 `applyTemplateToPage()`(§17.3,整段取代
+    paper+slots,slot id 全部重新產生,與 Auto Fill 的整段取代先例
+    一致,見 D-014/D-018)。
+  - `src/reducers.js` 新增 `saveTemplateAction()`/`deleteTemplateAction()`/
+    `applyTemplateAction()`——修正 `AppState.templates` 自 Phase 0 起
+    從未被任何 reducer 寫入的缺口(同一類別的缺口見 D-015 的
+    `AppState.sources`)。
+  - `src/store.js` 新增 `resetWithState(newState)`——載入專案是「情境
+    切換」而非衍生編輯,獨立於 `commit()` 之外,清空 `past`/`future`/
+    `pendingCoalesceKey`,讓 Undo 無法跳出這次載入回到另一個不相關專案
+    的歷史。
+  - `src/project-adapters.js`(新增)— `downloadProjectJson()`/
+    `readProjectFile()`,瀏覽器限定的薄 DOM 層。
+  - `dev/project.html`(新增)— Phase 9 dev harness:Save Project、Load
+    Project(含「請重新選取來源檔案」的第二階段 relink 流程)、Save as
+    Template、Apply Template、Undo/Redo 按鈕與 history 狀態顯示。
+  - 34 個新測試(共 437 個,403 → 437:`hash.js` 4〔新檔案〕、
+    `project-file.js` 19〔新檔案〕、`model.js` 1、`store.js` 3、
+    `pages.js` 3、`reducers.js` 4;另外 `sources.test.js` 對既有兩個
+    測試各加了一行 `contentHash` 斷言,不計入新增測試數)+ 瀏覽器實測
+    (Playwright:建立含 4 個
+    來源、Auto Fill、一次編輯的專案 → Save as Template → Save Project
+    → 模擬全新 session 載入 project.json → 確認正確提示需要重新選取
+    4 個來源 → 重新選取相同檔案 → relink 依雜湊比對成功、Slot 內容
+    正確還原且實際重新渲染(非僅 metadata 比對)、Undo 歷史正確歸零
+    且 `canUndo()`/`canRedo()` 皆為 false → 載入後的新編輯 Undo/Redo
+    運作正常 → Apply Template 正確清空該頁內容 → 另外構造一份 v1 格式
+    的舊專案 JSON,確認載入時 schemaVersion 正確 migrate 到 2 並補上
+    `cropMarks` 預設值)全數通過,console 無錯誤。
+
 ## Features In Development
-Phase 9(專案系統)尚未開始:Project 存檔/讀檔(`.json`,§17.1,Source
-二進位不內嵌)、`schemaVersion` migration(§17.2)、Layout Template 儲存/
-載入(§17.3,僅保存 Paper/Margins/Slots,不保存 Source)、Undo/Redo 的
-完整驗收(store.js 自 Phase 4 起已實作,但尚未有專案存檔情境下的往返
-測試)。見 `docs/plan.md` §17。
+Phase 10(Print Aids 進階與第二階段功能)尚未開始:Bleed、Safe Area、
+Page Number、Header/Footer、Text Box、浮水印、SVG、進階對齊、快捷鍵、
+Template Library(內建常用版型集合,§17.3 [S],Phase 9 僅實作使用者自存
+Template 的 [M] 核心需求,未含此項)。見 `docs/plan.md` §10.4/§16。
 
 ## Planned Features
-見 `docs/plan.md` §22 開發階段。Phase 9 → Phase 11。
+見 `docs/plan.md` §22 開發階段。Phase 10 → Phase 11。
 
 ## Known Issues
 - plan.md §9.1 的「2+2」preset 未定義其與 2×2 grid(=4up)的幾何差異,
@@ -399,6 +447,25 @@ Phase 9(專案系統)尚未開始:Project 存檔/讀檔(`.json`,§17.1,Source
   距離」,但 MVP 沒有 Bleed(出血,§16 [S])概念。日後若加入 Bleed,需要
   重新檢視這個距離該從 Slot 邊緣算起還是從出血邊界算起,見 decision_log
   D-017 Future Review Conditions。
+- `AppState.templates` 在 Phase 0-8 期間從未被任何 reducer 寫入(與
+  D-015 的 `AppState.sources` 同一類缺口),直到 Phase 9 才發現並修正
+  (新增 `saveTemplateAction`/`deleteTemplateAction`/`applyTemplateAction`),
+  見 decision_log D-018。
+- `SCHEMA_VERSION` 在 Phase 8 新增 `Project.cropMarks` 欄位時未同步提升
+  (仍是 1),直到 Phase 9 才發現並補上 1→2 的版本號與對應 migration,
+  見 decision_log D-018。若日後再有 Project/Source 欄位變動,務必同時
+  提升 `SCHEMA_VERSION` 並在 `src/project-file.js` 的
+  `migrateProjectData()` 補上對應遷移步驟,不能只改欄位不改版本號。
+- 專案存檔(`.json`)**不內嵌任何 Source 二進位**(§17.1),因此每次
+  「Load Project」之後,使用者一定要重新選取所有原始 PDF/圖片檔案——
+  這不是待補的功能,是 §17.1 明訂的設計(避免檔案過大)。`relinkSources()`
+  依檔名+頁碼+尺寸+雜湊比對重新選取的檔案,雜湊兩邊都有時為最終判準;
+  沒有雜湊或比對失敗的 Source 會停留在 `unresolved`,對應 Slot 在
+  Export 時會拋出「unknown source/no original bytes」錯誤,直到使用者
+  正確重新選取為止。
+- Layout Template Library(§17.3 [S],內建常用版型集合)未實作——Phase 9
+  只做了使用者自存 Template 的 [M] 核心需求(save/apply/delete),內建
+  範本集合留給 Phase 10,見 decision_log D-018。
 
 ## Technical Architecture
 Vanilla HTML5 + ES6+,PDF.js 負責解析與預覽,pdf-lib 負責輸出,esbuild 打包成
@@ -447,6 +514,18 @@ PDF」兩個按鈕(`dev/print.html`)各自獨立呼叫同一個
 `exportProjectToPdf()`,不是分岔出的第二條算繪路徑,§23.6.2 的「列印與
 匯出 PDF byte 內容一致」因此是架構上自然成立,而非需要額外程式碼保證的
 承諾。
+Phase 9 的 `src/hash.js` 是本專案第一個「第三方能力邊界」檔案不需要
+deps 注入/adapter 分層的案例——`crypto.subtle.digest()` 是瀏覽器與 Node
+收斂為同一份原生 API 的少數例外(已在這個 Node 版本直接驗證過),因此
+`src/sources.js` 可以直接 import 並呼叫它,不像 pdf.js/pdf-lib 需要
+vendor 抓取或 deps 注入。`src/project-file.js` 延續一貫的「純函式 +
+（必要時)deps 注入」分層,但它本身完全不碰任何第三方庫或 DOM——真正的
+瀏覽器邊界在 `src/project-adapters.js`(Blob/File API),與
+`export-adapters.js`是同一種分層。`store.js` 新增的 `resetWithState()`
+是 Phase 0 以來第一個不透過 `commit(reducer, action)` 改變狀態的入口,
+但仍是 `store.js` 自己管控、外部無法繞過的變更路徑,§7.1「單一 mutation
+入口」的精神(所有變更都通過 store 提供的 API)並未被打破,只是這次是
+「替換」而非「衍生」。
 
 ## Data Structure
 AppState = Project / Sources / Templates / Pages(→ Slots)/ Selection / History。
@@ -465,9 +544,19 @@ creator 經 `store.commit()` 寫入,唯一合法的 mutation 路徑(§7.1)。Slo
 兩者皆經 `src/reducers.js` 接上 `store.commit()`(Phase 6)。`Project`
 新增 `cropMarks` 欄位(§16,`createCropMarksSettings()`,Phase 8),經
 `setCropMarksAction()` 合併式更新,同樣走 `store.commit()`。
+`AppState.templates` 陣列透過 `saveTemplateAction`/`deleteTemplateAction`
+新增/刪除;套用一個 Template 到某頁(`applyTemplateAction` →
+`src/pages.js` 的 `applyTemplateToPage()`)整段取代該頁的 `paper`+`slots`
+(Phase 9)。Source 新增 `contentHash` 欄位(SHA-256 hex,`src/hash.js`,
+於 `sources.js` 載入時算好),供 `src/project-file.js` 的
+`relinkSources()` 在專案重新載入、使用者重新選取原始檔案時比對用
+(Phase 9,§17.1)。專案存/讀檔本身(`serializeProject()`/
+`deserializeProject()`)只處理 `project`/`sources`/`templates`/`pages`
+四個欄位,刻意不含 `selection`(比照 §7.3 排除 Zoom/Pan 進入 History 的
+理由,純 UI 狀態無存檔意義)。
 工廠函式見 `src/model.js`,幾何運算見 `src/geometry.js`,狀態管理見
-`src/store.js`,Source Engine 見 `src/sources.js`。詳見 `docs/plan.md` §5–§7、
-§12。
+`src/store.js`,Source Engine 見 `src/sources.js`,專案存讀檔見
+`src/project-file.js`。詳見 `docs/plan.md` §5–§7、§12、§17。
 
 ## API Structure
 N/A — 純前端,無後端 API。

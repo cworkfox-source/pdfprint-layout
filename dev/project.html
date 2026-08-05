@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>Phase 9 dev harness — Project System</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 1rem; color: #222; }
+  h1 { font-size: 1.1rem; }
+  .layout { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
+  .controls { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
+  .controls label { display: flex; flex-direction: column; font-size: 12px; gap: 2px; }
+  #gallery { display: flex; flex-direction: column; gap: 8px; border: 1px solid #ccc; padding: 8px; min-height: 100px; background: #fafafa; width: 160px; }
+  .tile { border: 1px solid #ddd; background: #fff; padding: 4px; font-size: 10px; word-break: break-all; }
+  .tile img { width: 100%; height: 50px; object-fit: contain; background: #eee; display: block; }
+  .tile .placeholder { width: 100%; height: 50px; background: #eee; display: flex; align-items: center; justify-content: center; color: #999; font-size: 9px; }
+  #pages { display: flex; flex-direction: column; gap: 12px; max-height: 60vh; overflow: auto; padding: 8px; background: #eee; border: 1px solid #ccc; width: 260px; }
+  .page-card { background: #fff; border: 1px solid #ccc; padding: 6px; }
+  .pl-slot { font-size: 8px; color: #900; overflow: hidden; }
+  #log { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; margin-top: 1rem; border-top: 1px solid #ccc; padding-top: 0.5rem; max-height: 200px; overflow: auto; }
+  #readout { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre; margin-top: 0.5rem; max-height: 200px; overflow: auto; }
+  fieldset { border: 1px solid #ccc; margin: 0; }
+  legend { font-size: 12px; font-weight: bold; }
+  #missing-sources { color: #b00020; font-size: 12px; }
+  .pass { color: #0a7d28; }
+  .fail { color: #b00020; }
+</style>
+</head>
+<body>
+<h1>Phase 9 dev harness — 不是產品 UI，僅供人工／自動化檢查 Project System（見 docs/plan.md Phase 9 / §17）</h1>
+
+<div class="controls">
+  <label>PDF / Image 檔案
+    <input id="file-input" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,image/*,application/pdf">
+  </label>
+  <button id="run-auto-fill">Auto Fill 4-up</button>
+  <button id="move-slot">編輯:移動第一個 Slot(供 Undo/Redo 示範)</button>
+  <button id="undo-btn">Undo</button>
+  <button id="redo-btn">Redo</button>
+</div>
+
+<div class="controls">
+  <button id="save-project">Save Project(§17.1 — 下載 project.json)</button>
+  <label>Load Project(選擇先前存的 project.json)
+    <input id="load-project-input" type="file" accept=".json,application/json">
+  </label>
+</div>
+
+<div id="reselect-panel" class="controls" style="display:none">
+  <div id="missing-sources"></div>
+  <label>重新選取原始 PDF/圖片檔案(§17.1 relink)
+    <input id="reselect-input" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,image/*,application/pdf">
+  </label>
+</div>
+
+<fieldset class="controls">
+  <legend>Layout Template(§17.3)</legend>
+  <label>名稱 <input id="template-name" type="text" value="A4_4up" style="width:8em"></label>
+  <button id="save-template">Save as Template(取自 Page 1 目前版面)</button>
+  <select id="template-select"></select>
+  <button id="apply-template">Apply to Page 1</button>
+</fieldset>
+
+<div class="layout">
+  <div id="gallery"></div>
+  <div id="pages"></div>
+</div>
+
+<div id="readout"></div>
+<div id="log"></div>
+
+<script type="module">
+  import * as pdfjsLib from '/vendor/pdfjs/pdf.mjs';
+  import { createStore } from '/src/store.js';
+  import { createAppState, createPage, createTemplate } from '/src/model.js';
+  import { computePaperPreviewLayout, resolveZoom, renderPaper, renderSlots, renderSlotContent, computeSlotPx } from '/src/preview.js';
+  import { generatePresetSlots, createSlotsFromRects } from '/src/layout.js';
+  import { autoFillAction, addSourceAction, moveSlotsAction, saveTemplateAction, applyTemplateAction } from '/src/reducers.js';
+  import { createSourceEngine } from '/src/sources.js';
+  import { renderPdfPageThumbnail, decodeImage, renderImageThumbnail, renderPdfPagePreview, renderImagePreview } from '/src/render-adapters.js';
+  import { createBinaryStore } from '/src/binary-store.js';
+  import { serializeProject, deserializeProject, relinkSources, findMissingSourceIds } from '/src/project-file.js';
+  import { downloadProjectJson, readProjectFile } from '/src/project-adapters.js';
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.mjs';
+
+  const $ = (id) => document.getElementById(id);
+  const gallery = $('gallery');
+  const pagesEl = $('pages');
+  const logEl = $('log');
+  const PAGE_ID = 'page-1';
+
+  const log = (msg, ok) => {
+    const line = document.createElement('div');
+    line.className = ok === undefined ? '' : (ok ? 'pass' : 'fail');
+    line.textContent = `${ok === undefined ? '·' : (ok ? '[PASS]' : '[FAIL]')} ${msg}`;
+    logEl.appendChild(line);
+    console.log(msg);
+  };
+
+  let binaryStore = createBinaryStore();
+  let sources = new Map(); // sourceId -> Source, this session's loaded sources
+  let engine = createSourceEngine({
+    binaryStore,
+    renderPdfPageThumbnail,
+    decodeImage,
+    renderImageThumbnail,
+    renderPdfPagePreview,
+    renderImagePreview,
+    onThumbnailReady: (sourceId) => {
+      const img = document.querySelector(`.tile[data-source-id="${sourceId}"] img`);
+      const placeholder = document.querySelector(`.tile[data-source-id="${sourceId}"] .placeholder`);
+      const thumb = engine.getThumbnail(sourceId);
+      if (img && thumb) { img.src = thumb.url; img.style.display = ''; if (placeholder) placeholder.style.display = 'none'; }
+      render();
+    },
+    onThumbnailError: (sourceId, err) => log(`縮圖失敗 ${sourceId}: ${err.message}`, false),
+  });
+
+  const paper = { size: 'A4', orientation: 'portrait', marginTopPt: 28, marginBottomPt: 28, marginLeftPt: 28, marginRightPt: 28, gapHorizontalPt: 8, gapVerticalPt: 8 };
+  function presetSlots(presetId) {
+    const layout = computePaperPreviewLayout(paper, 1);
+    const rects = generatePresetSlots(presetId, {
+      contentAreaWidthPt: layout.contentAreaPt.width, contentAreaHeightPt: layout.contentAreaPt.height,
+      gapHorizontalPt: paper.gapHorizontalPt, gapVerticalPt: paper.gapVerticalPt,
+    });
+    return createSlotsFromRects(rects);
+  }
+  let store = createStore(createAppState({ pages: [createPage({ id: PAGE_ID, paper, slots: presetSlots('4up') })] }));
+
+  const requestedPreviews = new Set();
+  function resolveContent(sourceId) {
+    if (!sourceId) return null;
+    return engine.getPreview(sourceId) ?? engine.getThumbnail(sourceId) ?? null;
+  }
+  function ensurePreviewsForVisibleSources() {
+    for (const page of store.getState().pages) {
+      for (const slot of page.slots) {
+        if (slot.sourceId && !requestedPreviews.has(slot.sourceId)) {
+          requestedPreviews.add(slot.sourceId);
+          const source = sources.get(slot.sourceId);
+          if (source) engine.ensurePreview(source).then(() => render()).catch((err) => log(`Preview 失敗: ${err.message}`, false));
+        }
+      }
+    }
+  }
+
+  function renderPageCard(page) {
+    let card = pagesEl.querySelector(`[data-page-id="${page.id}"]`);
+    if (!card) {
+      card = document.createElement('div');
+      card.className = 'page-card';
+      card.dataset.pageId = page.id;
+      pagesEl.appendChild(card);
+    }
+    const basePaper = page.paper ?? paper;
+    const layout = computePaperPreviewLayout(basePaper, resolveZoom('fit-width', {
+      containerWidthPx: 220, containerHeightPx: 99999,
+      paperWidthPt: computePaperPreviewLayout(basePaper, 1).paperPt.width,
+      paperHeightPt: computePaperPreviewLayout(basePaper, 1).paperPt.height,
+    }));
+    const paperEl = renderPaper(card, layout);
+    const contentEl = paperEl.querySelector(':scope > .pl-content-area');
+    renderSlots(contentEl, page.slots, layout.contentAreaPx.width, layout.contentAreaPx.height);
+    for (const el of contentEl.querySelectorAll(':scope > .pl-slot')) {
+      const slot = page.slots.find((s) => s.id === el.dataset.slotId);
+      const px = computeSlotPx(slot, layout.contentAreaPx.width, layout.contentAreaPx.height);
+      renderSlotContent(el, slot, resolveContent(slot.sourceId), px.width, px.height);
+    }
+  }
+
+  function renderTemplateSelect() {
+    const select = $('template-select');
+    const state = store.getState();
+    select.innerHTML = '';
+    for (const t of state.templates) {
+      const opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = `${t.name} (${t.slots.length} slots)`;
+      select.appendChild(opt);
+    }
+  }
+
+  function render() {
+    ensurePreviewsForVisibleSources();
+    const state = store.getState();
+    const keepIds = new Set(state.pages.map((p) => p.id));
+    for (const card of pagesEl.querySelectorAll('.page-card')) if (!keepIds.has(card.dataset.pageId)) card.remove();
+    state.pages.forEach((page) => renderPageCard(page));
+    renderTemplateSelect();
+
+    $('readout').textContent = JSON.stringify({
+      schemaVersion: state.project.schemaVersion,
+      projectName: state.project.name,
+      pageCount: state.pages.length,
+      pages: state.pages.map((p) => ({ id: p.id, slots: p.slots.map((s) => s.sourceId) })),
+      templateCount: state.templates.length,
+      sourceCount: state.sources.length,
+      historyDepth: store.historyDepth(),
+      canUndo: store.canUndo(),
+      canRedo: store.canRedo(),
+    }, null, 2);
+    window.__state = state;
+    window.__store = store;
+  }
+
+  function renderTile(source) {
+    const tile = document.createElement('div');
+    tile.className = 'tile';
+    tile.dataset.sourceId = source.id;
+    tile.innerHTML = `
+      <div class="placeholder">載入中…</div>
+      <img style="display:none">
+      <div>${source.kind}${source.kind === 'pdf-page' ? ` p${source.pageIndex + 1}` : ''}</div>
+      <div>${source.fileName ?? ''}</div>
+    `;
+    gallery.appendChild(tile);
+  }
+
+  async function handleFiles(fileList) {
+    for (const file of fileList) {
+      try {
+        if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+          const newSources = await engine.loadPdfFile(file, { pdfjsLib, pageRange: 'all' });
+          for (const s of newSources) {
+            sources.set(s.id, s);
+            store.commit(addSourceAction(s), null);
+            renderTile(s);
+          }
+          log(`載入 PDF ${file.name}:${newSources.length} 頁`, true);
+        } else {
+          const s = await engine.loadImageFile(file);
+          sources.set(s.id, s);
+          store.commit(addSourceAction(s), null);
+          renderTile(s);
+          log(`載入圖片 ${file.name}`, true);
+        }
+      } catch (err) {
+        log(`載入失敗 ${file.name}: ${err.message}`, false);
+        console.error(err);
+      }
+    }
+    render();
+  }
+
+  $('file-input').addEventListener('change', (e) => { if (e.target.files.length) handleFiles(e.target.files); });
+
+  // Auto Fill REPLACES the target page with freshly-generated page object(s)
+  // (auto-fill.js's createPage() calls mint new ids, per Phase 6) — so
+  // PAGE_ID only identifies the initial page, not whatever page occupies
+  // that slot afterward. Every handler below that needs "the current single
+  // page" reads it dynamically off the store instead of trusting PAGE_ID
+  // once Auto Fill may have run.
+  function firstPageId() { return store.getState().pages[0].id; }
+
+  $('run-auto-fill').addEventListener('click', () => {
+    const sourceIds = [...sources.keys()];
+    if (!sourceIds.length) { log('請先載入至少一個來源', false); return; }
+    store.commit(autoFillAction(firstPageId(), sourceIds, {}), null);
+    render();
+  });
+
+  $('move-slot').addEventListener('click', () => {
+    const page = store.getState().pages.find((p) => p.id === firstPageId());
+    const slotId = page?.slots[0]?.id;
+    if (!slotId) { log('沒有 Slot 可移動', false); return; }
+    store.commit(moveSlotsAction(firstPageId(), [slotId], 0.02, 0.02), null);
+    render();
+  });
+
+  $('undo-btn').addEventListener('click', () => { store.undo(); render(); });
+  $('redo-btn').addEventListener('click', () => { store.redo(); render(); });
+
+  // --- §17.1 Save Project -----------------------------------------------
+  $('save-project').addEventListener('click', () => {
+    const json = serializeProject(store.getState());
+    window.__lastSerializedProject = json; // Playwright hook: inspect without needing the real download
+    downloadProjectJson(json, 'project.json');
+    log(`Project 已序列化(schemaVersion ${json.schemaVersion}, ${json.sources.length} 個 Source, ${json.pages.length} 頁)`, true);
+  });
+
+  // --- §17.3 Layout Template ----------------------------------------------
+  $('save-template').addEventListener('click', () => {
+    const page = store.getState().pages.find((p) => p.id === firstPageId());
+    const template = createTemplate({ name: $('template-name').value || 'untitled', paper: page.paper ?? paper, slots: page.slots });
+    store.commit(saveTemplateAction(template), null);
+    log(`Template "${template.name}" 已儲存(${template.slots.length} 個 Slot,已去除 sourceId)`, true);
+    render();
+  });
+
+  $('apply-template').addEventListener('click', () => {
+    const templateId = $('template-select').value;
+    const template = store.getState().templates.find((t) => t.id === templateId);
+    if (!template) { log('請先選一個已儲存的 Template', false); return; }
+    store.commit(applyTemplateAction(firstPageId(), template), null);
+    log(`Template "${template.name}" 已套用到 Page 1`, true);
+    render();
+  });
+
+  // --- §17.1 Load Project + relink flow -----------------------------------
+  let pendingLoad = null; // { project, sources: savedSources, templates, pages }
+
+  $('load-project-input').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const json = await readProjectFile(file);
+      const loaded = deserializeProject(json);
+      pendingLoad = loaded;
+      window.__lastLoadedProjectSchemaVersion = json.schemaVersion;
+
+      const missing = findMissingSourceIds(loaded.pages, []);
+      if (missing.length === 0) {
+        finishLoad(loaded, []);
+        return;
+      }
+      $('reselect-panel').style.display = '';
+      $('missing-sources').textContent = `需要重新選取 ${missing.length} 個來源: ${
+        loaded.sources.filter((s) => missing.includes(s.id)).map((s) => s.fileName).join(', ')
+      }`;
+      log(`Project JSON 已載入(schemaVersion ${json.schemaVersion} -> ${loaded.project.schemaVersion}),等待重新選取 ${missing.length} 個來源檔案`, true);
+    } catch (err) {
+      log(`Load Project 失敗: ${err.message}`, false);
+      console.error(err);
+    }
+  });
+
+  $('reselect-input').addEventListener('change', async (e) => {
+    if (!pendingLoad) { log('尚未載入 project.json', false); return; }
+    try {
+      // Fresh engine/binaryStore/Map for this reload — simulates a genuinely
+      // new session, not just re-adding to the current one.
+      const freshBinaryStore = createBinaryStore();
+      const freshEngine = createSourceEngine({
+        binaryStore: freshBinaryStore,
+        renderPdfPageThumbnail, decodeImage, renderImageThumbnail, renderPdfPagePreview, renderImagePreview,
+      });
+      const freshSources = [];
+      for (const file of e.target.files) {
+        if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+          // eslint-disable-next-line no-await-in-loop
+          const newSources = await freshEngine.loadPdfFile(file, { pdfjsLib, pageRange: 'all' });
+          freshSources.push(...newSources);
+        } else {
+          // eslint-disable-next-line no-await-in-loop
+          const s = await freshEngine.loadImageFile(file);
+          freshSources.push(s);
+        }
+      }
+
+      const { relinked, unresolved } = relinkSources(pendingLoad.sources, freshSources);
+      log(`Relink: ${relinked.length} 個已比對成功,${unresolved.length} 個未比對`, unresolved.length === 0);
+
+      binaryStore = freshBinaryStore;
+      engine = freshEngine;
+      finishLoad(pendingLoad, relinked, unresolved);
+    } catch (err) {
+      log(`Relink 失敗: ${err.message}`, false);
+      console.error(err);
+    }
+  });
+
+  function finishLoad(loaded, relinkedSources, unresolvedSources = []) {
+    const finalSources = [...relinkedSources, ...unresolvedSources];
+    sources = new Map(finalSources.map((s) => [s.id, s]));
+    const newAppState = createAppState({
+      project: loaded.project, sources: finalSources, templates: loaded.templates, pages: loaded.pages, selection: [],
+    });
+    store.resetWithState(newAppState);
+    window.__store = store;
+
+    gallery.innerHTML = '';
+    for (const s of finalSources) renderTile(s);
+    requestedPreviews.clear();
+
+    const stillMissing = findMissingSourceIds(loaded.pages, relinkedSources.map((s) => s.id));
+    $('reselect-panel').style.display = stillMissing.length ? '' : 'none';
+    $('missing-sources').textContent = stillMissing.length ? `仍缺少 ${stillMissing.length} 個來源` : '';
+    pendingLoad = null;
+    log(`Project 載入完成(${finalSources.length} 個來源,${loaded.pages.length} 頁,history 已重置)`, true);
+    render();
+  }
+
+  log('就緒,請選擇 PDF 或圖片檔案');
+  render();
+
+  window.__engine = () => engine;
+  window.__sources = () => sources;
+  window.__handleFiles = handleFiles;
+  window.__waitForAllThumbnails = () => engine.waitForAllThumbnails();
+  window.__runAutoFill = () => $('run-auto-fill').click();
+  window.__moveSlot = () => $('move-slot').click();
+  window.__undo = () => $('undo-btn').click();
+  window.__redo = () => $('redo-btn').click();
+  window.__saveProject = () => $('save-project').click();
+  window.__saveTemplate = () => $('save-template').click();
+  window.__applyTemplate = (templateId) => { $('template-select').value = templateId; $('apply-template').click(); };
+</script>
+</body>
+</html>

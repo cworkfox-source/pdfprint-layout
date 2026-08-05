@@ -2,81 +2,6 @@
 
 > Older entries: docs/logs/ (archive, do not load at startup)
 
-## 2026-08-05 20:15
-
-### Type
-Feature
-
-### Summary
-完成 Phase 3 Layout Engine:`src/layout.js`(§9.1 preset 版型 + §9.2 自訂
-Grid 的純幾何產生器)、`src/preview.js` 新增 Slot 繪製(`computeSlotPx()`/
-`renderSlots()`)、`dev/layout.html` dev harness。23 個新單元測試
-(共 112 個)+ 真實瀏覽器(Playwright)逐一驗證全部 14 個 preset 的實際
-`getBoundingClientRect()` 與 model 換算值完全吻合。
-
-### Files Changed
-- src/layout.js、src/layout.test.js(新增)
-- src/preview.js — 新增 `computeSlotPx()`、`renderSlots()`;新增 import
-  `sortByZOrder`(geometry.js)
-- src/preview.test.js — 新增 2 個 `computeSlotPx` 測試
-- dev/layout.html(新增)— Phase 3 dev harness,非產品 UI
-- docs/decision_log.md — 新增 D-010(非對稱 preset 列/欄權重假設、
-  「2+2」preset 不實作的理由)
-- docs/project_status.md — TL;DR、Completed/In Development/Known Issues
-  更新
-
-### Reason
-延續 Phase 2 完成後的下一步(plan.md §22:Layout Engine 在 Source Engine
-之後)。§9.1 明訂 MVP 必備 preset 清單(1/2/4/6/9-up、上2下1、上1下2),
-§9.2 要求自訂 Grid,兩者都需要一個能從「內容區尺寸 + Gap 設定」算出
-Normalized Slot 座標的純函式核心,才能讓 Phase 4(自由版型)在同一份資料
-結構上疊加編輯能力,而不必重寫。
-
-### Implementation Details
-`src/layout.js` 只有一個真正的幾何原語:`splitAxis(sizePt, gapPt,
-weights)`——把一段長度依權重比例切成 N 段、扣除 (N-1) 個 gap,回傳已經是
-0..1 正規化的 `{start, size}`。§9.1 的均勻 grid(1/2/4/6/9/16-up)與 §9.2
-的自訂 Grid 是同一個 `generateGridSlots()`,差別只在 rows/cols 是常數還是
-使用者輸入。上2下1/上1下2/左1右2/左2右1(以及 [S] 的「3+1」「1+3」,對應
-`generateTopBottomSplit`/`generateLeftRightSplit` 的參數化版本)則是先把
-主軸(上下或左右)二等分,再對其中一段依格數均分——這個「二等分」是 Phase 3
-本身要填的假設,§9.1 的 ASCII 圖沒有文字明確規定,已記入 decision_log
-D-010,連同「2+2」preset 因語意不明而不實作的理由。
-
-`preview.js` 新增的 `computeSlotPx()`/`renderSlots()` 延續 Phase 1 建立的
-「純計算 vs DOM adapter」分離:前者把 Slot 的 Normalized 值換算成
-content-area 相對的 preview px(純函式,可測);後者只負責把換算好的數字
-寫進 DOM,並在繪製時呼叫 `geometry.js` 既有但至今未被任何 renderer 實際
-使用過的 `sortByZOrder()`(§6.5)——這是它第一次真正派上用場,也讓
-「Preview 與 Export 用同一份排序函式」不再只是文件承諾。
-
-### Impact Analysis
-Phase 3 的產出(`generatePresetSlots()`/`generateGridSlots()`/
-`createSlotsFromRects()`)是 Phase 4 自由版型編輯(拖曳/縮放/分割/合併)
-與 Phase 17 Template 儲存的共同基礎——兩者都直接操作這裡產生的 Slot
-陣列,不需要另一套資料轉換。`renderSlots()` 也是 Phase 5(Source
-Placement)畫出實際內容前,Slot 外框本身就能先被看見與互動的前提。
-
-### Verification Result
-PASS — 兩層驗證:
-1. `npm test`:112/112 通過(新增 23 個:layout.js 21、preview.js
-   computeSlotPx 2)。
-2. 瀏覽器實測(`node scripts/dev-server.mjs` + Playwright 啟動真實
-   Chromium,開啟 `http://localhost:5173/dev/layout.html`,console 無
-   錯誤):
-   - 逐一套用全部 14 個 preset(1up/2up-h/2up-v/4up/6up-2x3/6up-3x2/
-     9up/16up/top2-bottom1/top1-bottom2/left1-right2/left2-right1/
-     top3-bottom1/top1-bottom3):每個 Slot 的實際
-     `getBoundingClientRect()`(扣除 content-area 偏移後)與 model 的
-     normalized 值乘以 `contentAreaPx` 算出的期望值比較,容許
-     1.5px 次像素誤差,**全部 0 mismatch**。
-   - §9.2 自訂 Grid 輸入 3×5:正確產生 15 個 Slot。
-   - 切換 Orientation 後重新套用不報錯,Slot 數量不變(模型本身不因
-     Orientation 改變而自動變動,需使用者手動重新套用 preset,符合
-     §8.2 的既定行為)。
-   - Gap H/V 改為 20pt 後重新套用 4-up:算出的 normalized 值與手算公式
-     `(內容區長度 - gap) / 2 / 內容區長度` 相符。
-
 ## 2026-08-05 21:40
 
 ### Type
@@ -636,3 +561,117 @@ PASS — two layers:
    ~283-284px wide (100mm at pdf.js's 1px-per-pt scale=1 convention).
 
 ## 2026-08-06 | Docs | Rotated 1 entry (2026-08-05 19:30, Phase 2 Source Engine) to docs/logs/change_log_2026.md | wc -l verified (636 lines active after rotation)
+
+## 2026-08-06 03:15
+
+### Type
+Feature / Bugfix (schema-version gap-fill)
+
+### Summary
+Phase 9 Project System: save/load a project as `.json` (§17.1), Layout
+Template save/apply (§17.3), and `schemaVersion` migration (§17.2) — plus
+two real gaps found along the way: `AppState.templates` had never been
+written to by any reducer since Phase 0 (the same class of gap Phase 7
+found for `AppState.sources`), and `SCHEMA_VERSION` never got bumped when
+Phase 8 added `Project.cropMarks`, silently breaking the "one version
+number, one shape" contract §17.2 requires.
+
+### Files Changed
+- src/model.js — `SCHEMA_VERSION` 1 -> 2; `createSource()` gains
+  `contentHash` (§17.1's "雜湊" metadata field).
+- src/model.test.js — 1 new test.
+- src/hash.js (created) — `computeContentHash(bytes)`, a direct
+  `crypto.subtle.digest('SHA-256', ...)` call — no deps injection needed,
+  since Web Crypto is a converged Node/browser standard (verified directly
+  against this repo's Node runtime).
+- src/hash.test.js (created) — 4 tests.
+- src/sources.js — `loadPdfFile()`/`loadImageFile()` now hash each loaded
+  file's original bytes once (shared across every page-Source from the
+  same docId) and store it as `contentHash`.
+- src/sources.test.js — 2 new assertions added to existing tests.
+- src/project-file.js (created) — `serializeProject()` (envelope:
+  `{schemaVersion, project, sources, templates, pages}`, `selection`
+  excluded), `migrateProjectData()` (v1 -> v2 fills in the missing
+  `cropMarks` default; throws for a file newer than this app supports),
+  `deserializeProject()` (migrate + re-validate via `createSource()`/
+  `createTemplate()`), `relinkSources()` (§17.1's re-select-and-match flow:
+  fileName + pageIndex + dimensions, with contentHash as the authoritative
+  tiebreaker whenever both sides have one), `findMissingSourceIds()`.
+- src/project-file.test.js (created) — 19 tests.
+- src/pages.js — `applyTemplateToPage()` (§17.3; replaces a page's
+  paper+slots wholesale, regenerating Slot ids, same precedent as Auto
+  Fill's page replacement).
+- src/pages.test.js — 3 new tests.
+- src/reducers.js — `saveTemplateAction()`/`deleteTemplateAction()`/
+  `applyTemplateAction()` (new; fixes the AppState.templates gap).
+- src/reducers.test.js — 4 new tests.
+- src/store.js — `resetWithState(newState)` (new; a full state replacement
+  that clears `past`/`future`/`pendingCoalesceKey`, distinct from
+  `commit(reducer, action)` — loading a project is a context switch, not a
+  derived edit).
+- src/store.test.js — 3 new tests.
+- src/project-adapters.js (created) — `downloadProjectJson()`/
+  `readProjectFile()`, browser-only Blob/File glue (same split as
+  export-adapters.js, no unit test per that same precedent).
+- dev/project.html (created) — Phase 9 dev harness: load sources, Auto
+  Fill, Save Project, Load Project (with the "please re-select these
+  files" relink flow), Save as Template, Apply Template, Undo/Redo buttons
+  with a live history-depth readout.
+
+### Reason
+Next phase per plan.md §22 after Phase 8 (Print Path). A project's edit
+history and Layout Templates are only meaningful once they can actually be
+saved and reloaded, and store.js's Undo/Redo (implemented since Phase 4)
+had never been exercised in a save/load context until now.
+
+### Implementation Details
+See decision_log D-018 for the six judgment calls: the project.json
+envelope shape (`schemaVersion` hoisted to the top level rather than
+duplicated inside `project`, `selection` excluded entirely); the retroactive
+`SCHEMA_VERSION` bump and why it's being treated as fixing a real gap now
+rather than silently left inconsistent; the Source relink matching strategy
+(fileName + pageIndex + dimensions, contentHash as the authoritative
+signal when both sides have one — and REJECTING a match when both hashes
+are present but differ, even if everything else coincidentally matches);
+Template application semantics (wholesale replacement, matching Auto
+Fill's precedent, since plan.md gives no rule for what a "merge" would even
+mean); and why loading a project resets Undo/Redo history via a new
+`store.resetWithState()` rather than going through `commit()` as an
+ordinary reducer (a project load is a context switch, not an edit derived
+from whatever was open before).
+
+Because Source binaries are never embedded in the project file (§17.1,
+"避免檔案過大"), every project load requires the user to re-select every
+original PDF/image — this is the intended design, not a missing feature.
+`relinkSources()` is what makes that re-selection actually reattach to the
+right Slots afterward: it keeps each SAVED Source's original `id` (so
+existing `Slot.sourceId` references keep resolving) and only swaps in the
+freshly re-loaded bytes' `docId`.
+
+### Impact Analysis
+Phase 10 (advanced Print Aids / second-stage features) can now assume
+Projects persist correctly — any new Project-level setting it adds must
+come with a `SCHEMA_VERSION` bump and a migration step this time, per the
+gap D-018 just fixed. The built-in Template Library (§17.3 [S]) remains
+unimplemented — Phase 9 only covers the [M] user-saved-Template core.
+
+### Verification Result
+PASS — two layers:
+1. `npm test`: 437/437 passing (34 new: 403 -> 437).
+2. Browser verification (`node scripts/dev-server.mjs` + Playwright against
+   `http://localhost:5173/dev/project.html`, console clean): built a
+   project with 4 sources (3 PDF pages + 1 image) via Auto Fill plus one
+   manual edit, saved it as a Template, then serialized the whole project;
+   loading that JSON back (simulating a fresh session with a brand-new
+   SourceBinaryStore/engine) correctly prompted for the 4 missing source
+   files; re-selecting the SAME original files relinked all 4 by
+   content-hash, the reloaded Pages/Templates matched exactly what was
+   saved (Slot.sourceId references stayed valid), and the relinked
+   content actually re-rendered in the Preview (not just a metadata match);
+   history was fully reset after load (`canUndo`/`canRedo` both false), and
+   a fresh edit made after the load could be undone/redone normally;
+   applying the saved Template correctly cleared the page's content; and a
+   hand-constructed v1-shaped project JSON correctly migrated to
+   schemaVersion 2 with `cropMarks` defaults filled in.
+
+## 2026-08-06 | Docs | Rotated 1 entry (2026-08-05 20:15, Phase 3 Layout Engine) to docs/logs/change_log_2026.md | wc -l verified (675 lines active after rotation)

@@ -51,3 +51,17 @@ export function movePage(pages, pageId, toIndex) {
   next.splice(clampedTo, 0, page);
   return next;
 }
+
+// §17.3 (Phase 9) — applies a saved Template's Paper + Slots to an existing
+// Page, replacing BOTH wholesale (same "replace, don't merge" precedent as
+// Auto Fill's page replacement, decision_log D-014). A Template never
+// carries a Source reference (model.js's createTemplate() strips
+// `sourceId` from every Slot it saves), so applying one always clears
+// whatever content the target Page's Slots held — there is nothing to
+// preserve. Slot ids are regenerated (same `createSlot({ ...slot, id:
+// undefined })` pattern duplicatePage() uses above) so applying the same
+// Template twice, or to two different Pages, never collides on an id.
+export function applyTemplateToPage(page, template) {
+  const slots = template.slots.map((slot) => createSlot({ ...slot, id: undefined }));
+  return { ...page, paper: template.paper, slots };
+}
