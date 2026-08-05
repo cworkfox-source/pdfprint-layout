@@ -2,18 +2,18 @@
 
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
 Visual Page Imposition Designer,public repo
-https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-6 已完成**
-(geometry/store/model + paper/margin/zoom/print-CSS + PDF/圖片 Source
-Engine + Layout Engine + Free Layout Designer(含鎖定/解鎖、Z-order)+
-Source Placement(Fit/Cover/Stretch/Rotation/Scale/Offset/Flip/Clip)+
-Auto Imposition(Auto Fill、順序/逆序/奇偶/重複 N 次、Output Pages
-管理),238 個單元測試 + 瀏覽器實測皆通過)。下一步:Phase 7 PDF Export
-(pdf-lib 輸出,產品核心價值與最大技術風險)。無 blocker。
+https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-7 已完成**
+(引擎層:geometry/store/model、Source Engine、Layout Engine、Free Layout
+Designer、Source Placement、Auto Imposition、**PDF Export**〔pdf-lib 輸出,
+§23.3 Preview/Export 等價性以 104 案例證實,並修正一個嚴重的 XObject
+座標系 bug,見 D-016〕,382 個單元測試 + 瀏覽器實測(含真實 pdf-lib/pdf.js
+往返驗證)皆通過)。下一步:Phase 8 Print Path(列印經由匯出的 PDF、列印
+校正頁)。無 blocker。
 
 ## Current Version
-Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 6 完成
-(含 Phase 4 遺留的鎖定/解鎖、Z-order [M] 缺口補完,見 D-013;無產品 UI,
-僅引擎與 dev 檢查頁)
+Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 7 完成
+(含 Phase 4 遺留的鎖定/解鎖、Z-order [M] 缺口補完見 D-013、AppState.sources
+從未被寫入的缺口補完見 D-015;無產品 UI,僅引擎與 dev 檢查頁)
 
 ## Project Goals
 純前端、零後端、可離線、可打包為單一 HTML 的視覺化拼版工具。使用者載入 PDF 或
@@ -236,13 +236,80 @@ Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 6 �
     來源驗證;混合尺寸提示正確顯示;Duplicate/Delete/Move Up 頁面管理
     皆正確反映在 DOM 與 store 狀態)全數通過,console 無錯誤。
 
+- Phase 7 PDF Export(2026-08-06):**產品核心價值與最大技術風險**。
+  - `src/export.js` — `roundedPaperSizePt()`(§14.6 MediaBox 取整)、
+    `computeSlotAbsoluteRectPt()`(Slot 絕對 pt 矩形)、
+    `computeContentRotationAndSize()`(image 用像素、pdf-page 用
+    `effectiveBoundingBox()` 的 RAW pt,合併 `slot.rotation +
+    source.pageRotate`)、`computeExportContentMatrix()`(概念矩陣,僅供
+    §23.3 等價性測試比對,不含 pdf-lib 特定修正)、
+    `computeXObjectDrawMatrix()`(實際餵給 pdf-lib `cm` 運算子的矩陣,在
+    概念矩陣之上疊加依 source kind 而異的座標系修正,見下方 D-016)、
+    `computeExportClipRectPt()`(Slot 裁切矩形,Slot 本身不旋轉故僅需
+    Y 翻轉)、`detectImageFormat()`(PNG/JPEG/WEBP magic bytes 偵測,不信
+    檔名)、`embedSource()`(pdf-page 走 `PDFDocument.load` +
+    `embedPage()`,`EncryptedPDFError` 轉換成明確錯誤訊息;image 视需要經
+    `deps.transcodeWebpToPng` 轉碼後 `embedPng`/`embedJpg`)、
+    `exportProjectToPdf()`(完整管線:依 `state.sources` 建索引、每頁依
+    `sortByZOrder()` 排序 Slot、以 `embeddedBySourceId` Map 去重同一
+    Source 的重複嵌入、用低階運算子 `pushGraphicsState → rectangle →
+    clip → endPath → concatTransformationMatrix → drawObject →
+    popGraphicsState` 而非高階 `drawPage()`/`drawImage()`,避免矩陣分解
+    風險)。所有 pdf-lib API 皆經 `deps` 參數注入,orchestration 邏輯可在
+    純 Node 測試,真實庫僅在專屬測試檔與瀏覽器中被呼叫。
+  - **關鍵 bug 與修正**:`computeExportContentMatrix()` 原始實作(概念矩陣
+    直接當作繪製矩陣)通過全部 104 個 §23.3 等價性測試與多項 byte-level
+    測試,但實際以真實 pdf-lib 匯出、真實 pdf.js 重新渲染後畫面明顯錯誤
+    (文字上下顛倒、圖片幾乎不可見)。根因:pdf-lib 嵌入的 XObject 有
+    自己的原生座標系,與 `slotContentMatrix()` 假設不符——Image XObject
+    是 [0,1]×[0,1] 單位正方形需要 rescale+flip,Form XObject(embedPage)
+    是 Y-up、與 BBox 尺寸相同只需要 flip。透過系統化校準方法定位
+    (四色象限測試圖/測試頁,對照 pdf-lib 自身高階 API 當作已知正確
+    基準,逐一排除候選矩陣的符號組合)。修正方式:拆成
+    `computeExportContentMatrix()`(概念、供等價性測試)與
+    `computeXObjectDrawMatrix()`(pdf-lib 專用、供實際繪製)兩個函式,並
+    針對這兩個校準後的精確矩陣數值加上永久回歸測試(純函式層級 +
+    解析真實匯出 PDF 的 `cm` 運算子 byte 內容層級)。完整診斷過程見
+    decision_log D-016。
+  - **AppState.sources 缺口修正**:發現 Phase 2-6 從未有任何 reducer
+    真正寫入 `AppState.sources`(Preview 一直只用 harness 端本地 Map),
+    導致 `exportProjectToPdf()` 對已載入的 Source 仍拋
+    「unknown source」錯誤。修正:`src/reducers.js` 新增
+    `addSourceAction()`/`removeSourceAction()`,並回頭修改
+    `dev/placement.html`、`dev/auto-fill.html`、`dev/export.html` 三個
+    harness,載入 Source 時同步呼叫 `store.commit(addSourceAction(s))`。
+    見 decision_log D-015。
+  - `src/export-adapters.js` — 瀏覽器限定的 `transcodeWebpToPng()`,沿用
+    `render-adapters.js` 的 `createImageBitmap` + Canvas 模式,但以原生
+    解析度轉碼(不像 Preview 分層有上限)。
+  - `dev/export.html` — Source Gallery(沿用 Phase 2/5 引擎)+ Auto Fill
+    按鈕(沿用 `autoFillAction`)+ Export PDF 按鈕 + 驗證面板(以真實
+    pdf-lib 重新載入輸出結果做結構檢查、以真實 pdf.js 重新渲染做視覺
+    檢查)。
+  - `scripts/fetch-vendor.sh` 擴充為同時抓取 pdf-lib
+    1.17.1(`vendor/pdf-lib/pdf-lib.esm.js`,unpkg CDN 被 proxy 擋
+    403,改用 npm registry tarball)。已驗證 pdf-lib 可在 Node 原生執行
+    (不像 pdf.js 需要 Worker/DOM),故 `src/export-real-pdf-lib.test.js`
+    直接動態 import 真實 pdf-lib、以 `{ skip }` 優雅跳過未抓取 vendor
+    的環境。
+  - 144 個新單元/整合測試(共 382 個:export.js 純函式測試、
+    preview-export-equivalence.test.js 104 案例〔2 Source × 3 fitMode ×
+    4 旋轉 × 4 翻轉組合 + 8 個 offset/scale 案例,EPSILON_PT=0.28〕、
+    export-real-pdf-lib.test.js 5 個〔含解析真實 `cm` 運算子 byte 的
+    回歸測試、8-Slot-1-XObject 去重測試、`/Rotate 90` 來源頁測試〕)+
+    瀏覽器實測(Playwright:合成混合尺寸來源匯出、以真實 pdf-lib 重新
+    載入確認 MediaBox/頁數/資源去重、以真實 pdf.js 重新渲染確認畫面
+    正確——非僅靠自動化像素計數,人工檢視畫面才發現前述關鍵 bug)全數
+    通過,console 無錯誤。
+
 ## Features In Development
-Phase 7(PDF Export)尚未開始:pdf-lib 輸出、`/Rotate` 正規化、CropBox、
-WEBP 轉碼、資源去重。**這是產品的核心價值與最大技術風險**,§23.3
-Preview/Export 等價性驗證須在此階段建立。
+Phase 8(列印路徑)尚未開始:列印一律經由匯出的 PDF(§15.1,不採用
+`window.print()` 直接列印 DOM,避免第三套幾何實作)、列印校正頁
+(§15.3,100mm×100mm 測試框供使用者確認印表機為 Actual Size)、Crop
+Marks。見 `docs/plan.md` §15。
 
 ## Planned Features
-見 `docs/plan.md` §22 開發階段。Phase 7 → Phase 11。
+見 `docs/plan.md` §22 開發階段。Phase 8 → Phase 11。
 
 ## Known Issues
 - plan.md §9.1 的「2+2」preset 未定義其與 2×2 grid(=4up)的幾何差異,
@@ -266,6 +333,18 @@ Preview/Export 等價性驗證須在此階段建立。
   策略因此對兩種 kind 分別採 DPI 換算 vs. 純封頂兩套函式——若日後圖片
   需要「實際列印尺寸」語意(例如使用者輸入照片實體寬高),需回頭重新設計
   §5.2 的尺寸欄位,見 D-012 Future Review Conditions。
+- Preview 的概念矩陣(`geometry.js` `slotContentMatrix()` + Y 翻轉)與
+  Export 實際餵給 pdf-lib 的矩陣(`export.js`
+  `computeXObjectDrawMatrix()`)並非同一個矩陣——兩者在數學上等價(同一個
+  座標變換),但後者疊加了 pdf-lib 嵌入 XObject 原生座標系(image 單位
+  正方形、pdf-page Y-up)所需的額外修正。若日後新增第三種 Source kind 或
+  改用其他 PDF 函式庫,必須重新逐一校準這層修正,不能假設沿用既有公式,
+  見 decision_log D-016。
+- `AppState.sources` 在 Phase 2-6 期間從未被任何 reducer 寫入(Preview 全程
+  只用 harness 端本地 Map),直到 Phase 7 才發現並修正(新增
+  `addSourceAction`/`removeSourceAction`,回頭修改三個 dev harness)。若日後
+  新增 Source 載入入口,務必同步呼叫 `addSourceAction`,否則 Export 會對
+  該 Source 拋「unknown source」錯誤,見 decision_log D-015。
 
 ## Technical Architecture
 Vanilla HTML5 + ES6+,PDF.js 負責解析與預覽,pdf-lib 負責輸出,esbuild 打包成
@@ -290,7 +369,18 @@ reducers.js 接線」分層,`autoFillAction()` 是第一個會一次改動
 `AppState.pages` 陣列本身(而非單一頁面內的 slots)的 reducer,與既有
 `updatePageSlots()` 的操作範疇並列但不重疊。開發期用
 `scripts/dev-server.mjs`(http://)跑原生 ESM,`file://` 相容性只在
-Phase 11 打包產物上驗證。
+Phase 11 打包產物上驗證。Phase 7 的 `src/export.js` 是第一個真正呼叫
+pdf-lib 的模組,同樣採「純函式 + deps 注入」分層:所有 pdf-lib API 呼叫
+(`PDFDocument.create/load`、`embedPng/embedJpg/embedPage`、
+`pushGraphicsState` 等低階運算子)只在 `embedSource()`/
+`exportProjectToPdf()` 內部經 `deps` 參數呼叫,故 orchestration 邏輯
+(去重、z-order、頁面迭代)可用 fake pdfLib 在純 Node 測試,真實 pdf-lib
+只在 `export-real-pdf-lib.test.js`(guarded,vendor 未抓取則 skip)與瀏覽器
+(`dev/export.html`)中被呼叫。§4.3「Preview/Export 幾何等價」的契約由
+`preview-export-equivalence.test.js` 驗證兩者的**概念矩陣**一致,但這只能
+證明雙方的矩陣數學互相一致,無法證明任一方對真實 pdf-lib 繪製語意是正確
+的——這正是 D-016 那個關鍵 bug 能通過全部等價性測試卻仍視覺錯誤的原因,
+最終靠人工檢視 Playwright 產生的畫面、而非自動化像素計數,才發現問題。
 
 ## Data Structure
 AppState = Project / Sources / Templates / Pages(→ Slots)/ Selection / History。
@@ -322,8 +412,10 @@ N/A — 純前端,無後端 API。
 
 ## Dependencies
 PDF.js(開發用 v5.4.149,由 `scripts/fetch-vendor.sh` 取得至 `vendor/`,不
-commit,見 decision_log D-009)、pdf-lib(Phase 7 才需要)、esbuild(build
-期)。不引入前端 Framework 與 SortableJS。`playbooks/` 目錄現為空
+commit,見 decision_log D-009)、pdf-lib(開發用 1.17.1,同樣由
+`scripts/fetch-vendor.sh` 取得,unpkg CDN 被 proxy 擋 403、改用 npm
+registry tarball,見 decision_log D-015;Phase 7 起實際使用)、esbuild
+(build 期)。不引入前端 Framework 與 SortableJS。`playbooks/` 目錄現為空
 (2026-08-05 移除無關的 Python 打包 playbook)。
 
 ## Future Roadmap

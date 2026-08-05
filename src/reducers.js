@@ -188,3 +188,22 @@ export function duplicatePageAction(pageId) {
 export function movePageAction(pageId, toIndex) {
   return (state) => ({ ...state, pages: movePage(state.pages, pageId, toIndex) });
 }
+
+// --- Sources (§5.1/§5.2) ---------------------------------------------------
+// A gap found while implementing Phase 7 Export: every dev harness through
+// Phase 6 kept its OWN local Map of loaded Source objects for Preview
+// lookups (keyed by sourceId, resolved client-side) and never actually
+// wrote them into `AppState.sources` — Preview never needed to, since it
+// always had that local Map handy. Export (`export.js`'s
+// exportProjectToPdf()) is the first consumer that reads Source objects
+// straight off AppState itself (as the single source of truth §5.1
+// describes), which is what surfaced this as a real, previously-invisible
+// gap rather than a Phase 7-specific need. Phase 9 (Project Save/Load) will
+// need this same array populated to serialize a project at all.
+export function addSourceAction(source) {
+  return (state) => ({ ...state, sources: [...state.sources, source] });
+}
+
+export function removeSourceAction(sourceId) {
+  return (state) => ({ ...state, sources: state.sources.filter((s) => s.id !== sourceId) });
+}

@@ -15,6 +15,7 @@ import {
   slotContentMatrix,
   boundingBoxOfTransformedRect,
   modelYToPdfY,
+  pdfPageFlipMatrix,
   normalizeSourceDimensions,
   effectiveBoundingBox,
   sortByZOrder,
@@ -179,6 +180,43 @@ test('modelYToPdfY flips only within this one function', () => {
   // An element flush with the bottom of the page (modelY = 841.89 - 100)
   // should land at pdfY = 0.
   assertClose(modelYToPdfY(841.89 - 100, 100, 841.89), 0);
+});
+
+test('pdfPageFlipMatrix, applied to an unrotated rect, matches modelYToPdfY exactly (§6.2)', () => {
+  const paperHeightPt = 841.89;
+  const elementHeightPt = 100;
+  const modelY = 200;
+  const flip = pdfPageFlipMatrix(paperHeightPt);
+  // top-left corner of the rect at (x, modelY) and bottom-left at (x, modelY+h)
+  const topLeft = applyToPoint(flip, 50, modelY);
+  const bottomLeft = applyToPoint(flip, 50, modelY + elementHeightPt);
+  // in PDF space (Y-up), the rect's bottom edge is the SMALLER of the two
+  // transformed y values, and must equal modelYToPdfY()'s answer.
+  assertClose(Math.min(topLeft.y, bottomLeft.y), modelYToPdfY(modelY, elementHeightPt, paperHeightPt));
+  assertClose(topLeft.x, 50); // x is untouched by the flip
+});
+
+test('pdfPageFlipMatrix correctly carries a 90° rotation through the Y-flip (unlike a naive translation-only flip)', () => {
+  const paperHeightPt = 800;
+  const flip = pdfPageFlipMatrix(paperHeightPt);
+  // Compose the flip in FRONT of a model-space rotation, matching how
+  // export.js composes it in front of slotContentMatrix()'s output.
+  const modelMatrix = compose(translate(100, 100), rotateDeg(90));
+  const pdfMatrix = compose(flip, modelMatrix);
+  // A point at model-local (10, 0): rotateDeg(90) sends (10,0) -> (0,10)
+  // (§6.3's rotation convention, positive = clockwise in Y-down model
+  // space), then translate(100,100) -> model point (100, 110).
+  const modelPoint = applyToPoint(modelMatrix, 10, 0);
+  assertClose(modelPoint.x, 100);
+  assertClose(modelPoint.y, 110);
+  // Flipping that SAME point directly must equal composing-then-applying —
+  // i.e. flip(rotate(point)) must equal the composed matrix applied once,
+  // proving the rotation survived the composition instead of being
+  // silently dropped by a naive "just flip Y at the end" shortcut.
+  const composedPoint = applyToPoint(pdfMatrix, 10, 0);
+  const appliedSeparately = applyToPoint(flip, modelPoint.x, modelPoint.y);
+  assertClose(composedPoint.x, appliedSeparately.x);
+  assertClose(composedPoint.y, appliedSeparately.y);
 });
 
 test('normalizeSourceDimensions swaps width/height only for 90/270', () => {

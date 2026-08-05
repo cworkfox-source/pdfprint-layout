@@ -879,3 +879,227 @@ B 案是憑空替 plan.md 加需求,且會讓實作與測試複雜度不成比�
 若使用者對「每頁重複」給出與(1)A 不同的明確定義(例如證實它其實是
 獨立於 repeatCount 之外的另一個維度),需要回頭重新設計 `applyFillRule()`
 的參數形狀,而不是勉強塞進現有的三個正交參數。
+
+## D-015 — Phase 7 PDF Export 架構:pdf-lib 在 Node 測試中直接可用、低階 operator 而非高階 drawPage/drawImage、AppState.sources 從未被寫入的缺口
+
+### Date
+2026-08-06
+
+### Topic
+架構 / 開發工具鏈 / 測試策略
+
+### Context
+實作 Phase 7(plan.md §14 Export Renderer)時遇到三個決定性的技術問題:
+
+1. plan.md §21 指定 pdf-lib 為 Export 函式庫,但本專案至今(Phase 0-6)維持
+   「零 npm 依賴、`npm test` 只靠 Node 內建 `node:test`」的慣例——Phase 2
+   對 pdf.js 的處理方式是:核心邏輯完全靠假物件(fake `pdfjsLib`)在 Node
+   測試,真正的 pdf.js 只在瀏覽器(Playwright)驗證,因為 pdf.js 需要
+   Worker/DOM 環境。pdf-lib 是否也必須走同一條路?
+2. §14.1 的管線要「套用 §6.3 矩陣」到 embedPage/embedImage 產生的內容,但
+   pdf-lib 的高階 API(`page.drawPage()`/`page.drawImage()`)只接受
+   `{x,y,xScale,yScale,rotate,xSkew,ySkew}` 這組參數,無法直接餵入
+   geometry.js 現成的 6 值仿射矩陣(尤其 flip 需要負數 scale,高階 API
+   未必支援)。
+3. 實作 `dev/export.html` 時發現 `exportProjectToPdf()` 讀取
+   `state.sources` 一律是空陣列——追查後發現 Phase 2-6 的每個 dev harness
+   都只維護自己的本地 `sources` Map(供 Preview 查詢),從未呼叫任何
+   reducer 把載入的 Source 寫進 `AppState.sources`,因為 Preview 一直只需要
+   本地 Map 就夠用。`reducers.js` 裡從來沒有 `addSourceAction` 這種東西。
+
+### Alternatives Considered
+(1) pdf-lib 的測試策略:
+  A. 直接驗證:`pdf-lib.esm.js`(npm 套件的 dist 產物)在純 Node 環境下
+     實測(`node --input-type=module -e "..."`)確認核心 API(`create`/
+     `load`/`save`/`embedPdf`/`embedPng`/`embedJpg`)完全不需要 Worker 或
+     DOM,可直接在 `node:test` 中使用真正的函式庫,不需要像 pdf.js 那樣
+     全靠假物件。`src/export.js` 本身仍不在模組頂層 import pdf-lib(維持
+     deps 注入,§4.1),但測試檔案可以注入「真正的」pdf-lib。
+  B. 比照 pdf.js 的做法,`src/export.js` 的核心邏輯一律只用假物件測試,
+     真正的 pdf-lib 只在瀏覽器 Playwright 驗證。
+  C. 把 pdf-lib 直接列為 npm `dependencies`(`npm install pdf-lib`),而非
+     沿用 `scripts/fetch-vendor.sh` 的 vendor 拉取模式。
+
+(2) 矩陣套用方式:
+  A. 放棄 pdf-lib 的高階 `drawPage`/`drawImage`,改用其匯出的低階 operator
+     建構函式(`pushGraphicsState`/`concatTransformationMatrix`/
+     `drawObject`/`popGraphicsState`/`rectangle`/`clip`/`endPath`),直接把
+     geometry.js 算出的 6 值矩陣以一個 `cm` operator 寫入內容流,裁切用
+     `re`+`W`+`n`。
+  B. 想辦法把 6 值矩陣分解成高階 API 能接受的
+     `{x,y,xScale,yScale,rotate,xSkew,ySkew}` 參數組合。
+  C. 放棄使用矩陣,改為針對每種 fitMode/rotation/flip 組合寫個別對應的
+     高階 API 呼叫。
+
+(3) AppState.sources 缺口:
+  A. 在 `reducers.js` 新增 `addSourceAction()`/`removeSourceAction()`,並
+     回頭補上 Phase 5/6 遺留的三個 dev harness(`placement.html`/
+     `auto-fill.html`/`export.html`),讓每個載入的 Source 同時寫進本地
+     Map(供這些 harness 自己的 Preview 查詢用)與 `store.commit()`(供
+     Export/未來的 Project Save 用)。
+  B. 只在 `export.html` 補,不動其他兩個既有 harness。
+  C. 讓 `exportProjectToPdf()` 改成直接接受一個外部 Source 查找表
+     (Map),不依賴 `AppState.sources`。
+
+### Selected Solution
+(1) A。(2) A。(3) A。
+
+### Reason
+(1)A 案在動手前先用一次性腳本直接驗證 pdf-lib 的 `dist/pdf-lib.esm.js`
+在 Node 下能正常 `create`/`save`/`load`(zero import 語句,所有依賴——
+pako、tslib、@pdf-lib/standard-fonts、@pdf-lib/upng——都已被打包進單一
+檔案,不需要 Worker 或 DOM API),因此不必像 pdf.js 那樣被迫全靠假物件;
+用真正的函式庫能寫出遠比假物件更有說服力的測試(§23.7 要求的「文字仍可
+選取」「同一張圖只 embed 一次」等,靠假物件測不出真正的 PDF 位元組結構)。
+B 案會白白放棄這個可行性,讓 Phase 7 的測試信心低於它本可以達到的水準。
+C 案違背本專案「打包成單一離線 HTML、不依賴 npm 生態」的既有慣例
+(decision_log D-004/D-008),且會讓 `node_modules` 出現在一個目前完全不需要
+它的專案裡。
+(2)A 案是唯一能保證「Export 用的矩陣就是 geometry.js 算出的那個矩陣,一個
+值都沒有被重新拆解」的做法,直接消除「分解成高階參數時算錯正負號或漏看
+flip」這整類風險;B 案在有 flip(負 scale)時是否可行取決於 pdf-lib 內部
+如何處理負的 `xScale`/`yScale`,屬於未驗證的不確定行為,且分解三角函數
+容易在浮點誤差與角度正規化上出錯;C 案會讓 Export 出現「N 個 fitMode ×
+rotation 組合各自一套程式碼」的重複與遺漏風險,且完全放棄 geometry.js
+「唯一矩陣函式」的既有投資。
+(3)A 案是唯一真正修好缺口的做法,且與 D-013(Phase 5 稽核時發現 Phase 4
+遺留缺口)是同一種情境——不回頭補其他 harness 只會讓下次某個功能又踩到
+同一個坑;B 案留下技術債;C 案讓 `exportProjectToPdf()` 的簽章脫離 §5.1
+「AppState 是唯一狀態來源」的設計原則,且無法滿足 Phase 9 Project Save/
+Load 需要序列化 `state.sources` 的需求。
+
+### Consequences
+- `scripts/fetch-vendor.sh` 新增 pdf-lib 1.17.1(`dist/pdf-lib.esm.js`,從
+  npm registry tarball 解出;unpkg CDN 在本環境被 proxy 擋下 403,改用
+  `registry.npmjs.org` 的 tarball URL)至 `vendor/pdf-lib/`,與既有 pdf.js
+  vendor 並列,同樣不 commit。
+- `src/export.js` 完全不在模組頂層 import pdf-lib 或 vendor 任何東西——
+  `exportProjectToPdf()`/`embedSource()` 透過 `deps.pdfLib` 注入,維持
+  §4.1 的注入慣例,但測試檔案(`src/export-real-pdf-lib.test.js`)可以
+  `await import('../vendor/pdf-lib/pdf-lib.esm.js')` 拿到真正的函式庫。
+  此檔案在 vendor 未被 fetch 時,用 `test(name, {skip: reason}, fn)` 整檔
+  優雅跳過並顯示提示訊息,而不是讓 `npm test` 在全新 clone 上失敗——
+  `src/export.test.js` 的假 pdfLib 測試已經覆蓋同一批 orchestration 邏輯,
+  真正的函式庫只用來做假物件做不到的位元組層級驗證。
+- `src/export.js` 的繪製改用 pdf-lib 匯出的低階 operator
+  (`pushGraphicsState`/`concatTransformationMatrix`/`drawObject`/
+  `popGraphicsState`/`rectangle`/`clip`/`endPath`),繞過高階
+  `drawPage`/`drawImage`,確保矩陣不被二次分解。
+- `src/reducers.js` 新增 `addSourceAction()`/`removeSourceAction()`;
+  `dev/placement.html`/`dev/auto-fill.html`/`dev/export.html` 三個既有/
+  新增的 dev harness 全部回頭補上「載入 Source 時同時寫入
+  `store.commit(addSourceAction(...))`」,不再只靠本地 Map。
+- Phase 8(Print Path)、Phase 9(Project System)可直接沿用同一套
+  pdf-lib 注入與 vendor 策略,不需要重新評估。
+
+### Future Review Conditions
+若日後升級 pdf-lib 版本後其 dist 產物開始依賴瀏覽器專屬 API(目前
+1.17.1 未觀察到此問題),需要重新驗證 Node 直接可用性,必要時退回方案 B。
+
+## D-016 — Phase 7 PDF Export:XObject 繪製座標系與 slotContentMatrix 假設不符的嚴重 bug,以及概念矩陣／繪製矩陣的拆分
+
+### Date
+2026-08-06
+
+### Topic
+架構 / 正確性 / 測試方法論
+
+### Context
+`computeExportContentMatrix()` 的初版實作(把 §6.2 的 `pdfPageFlipMatrix()`
+接在 `slotContentMatrix()` 前面)通過了 §23.3 equivalence 測試的全部
+104 個案例,也通過了一批只檢查頁數/MediaBox/文字可選取/資源去重的真實
+pdf-lib 測試——但用 `dev/export.html` 實際跑一次「3 頁混合尺寸 PDF(含
+`/Rotate 90`)+ 1 張圖片,4-up 版面」再以真正的 pdf.js 重新渲染輸出的
+PDF 時,畫面明顯錯誤:文字全部上下顛倒、圖片幾乎完全消失(見對話中的
+截圖與逐步排查記錄)。
+
+逐一用 Playwright + 真實 pdf-lib + 真實 pdf.js 隔離測試後,精確定位出
+兩個獨立、且與 `slotContentMatrix()` 完全無關的成因:
+
+1. **圖片(`embedPng`/`embedJpg`)**:內嵌的 Image XObject 原生佔用的是
+   **單位正方形** `[0,1]x[0,1]`,不是 `contentW x contentH`——pdf-lib 自己
+   的高階 `drawImage()`/`drawPage()` 都是把單位正方形再另外 `scale()` 到
+   目標像素尺寸,從未直接以 `contentW x contentH` 為單位繪製。直接把
+   `computeExportContentMatrix()` 算出的矩陣(假設輸入範圍是
+   `[0,contentW]x[0,contentH]`)當成 `cm` 值,會把圖片畫進一個近乎不可見
+   的極小角落(實測:100×100 圖片撐滿 200×200 Slot 時,只有一塊 2×2pt
+   的區域真正被畫到)。
+2. **PDF 頁面(`embedPage`)**:Form XObject 的 BBox 確實與
+   `contentW x contentH` 一致(`boundingBoxAdjustedMatrix` 只做平移,見
+   `vendor/pdf-lib/pdf-lib.esm.js` 原始碼),但其座標系是 **Y 軸向上**
+   (原始 PDF 頁面自己的原生座標系,未被改動),與
+   `slotContentMatrix()` 假設的「內容本地座標為 Y 軸向下、左上角原點」
+   (對應 Preview 用的點陣圖/CSS 慣例)方向相反——實測顯示:不修正的話,
+   內容會整個垂直鏡射(用四色象限測試圖精確驗證,非籠統的「看起來怪怪
+   的」)。
+
+這揭露一個方法論層面的重要教訓:**§23.3 的 equivalence 測試只證明
+Preview 與 Export「兩邊自己的矩陣數學互相一致」,完全無法證明任一邊
+「相對於 pdf-lib 真正的繪圖語意是正確的」**——因為 equivalence 測試比較的
+是兩個「用同一套(可能同時錯誤的)假設算出來的」矩陣,兩者一致並不代表
+假設本身是對的。這正是本專案從 Phase −1 就決定「UI/繪圖相關程式碼必須用
+真實瀏覽器/真實函式庫驗證,不能只靠單元測試」這條規則存在的理由,這次
+是它在 Export 這一側第一次真正發威。
+
+### Alternatives Considered
+(1) 如何確認正確的修正公式:
+  A. 用 Playwright 對照組實驗:分別用 pdf-lib 自己的高階
+     `drawImage()`/`drawPage()`(視為已知正確的參考答案)與「我方低階
+     matrix 方案的候選公式」畫同一張四象限測色圖,交給真正的 pdf.js
+     重新渲染後逐色比對,直到候選公式與參考答案完全吻合為止——不接受
+     憑手算/口頭推理就下結論(這次手算過程中我自己就推錯了兩次方向,
+     若未經實測驗證會把錯誤的假設寫進正式程式碼與其文件註解)。
+  B. 純靠閱讀 pdf-lib/PDF 規格書手動推導座標系慣例。
+  C. 放棄矩陣繪製方式,改用 pdf-lib 高階 API 逐一嘗試,直到肉眼看起來
+     正確為止。
+
+(2) `computeExportContentMatrix()` 是否要包含 pdf-lib 專屬修正:
+  A. 拆成兩個函式:`computeExportContentMatrix()` 維持「概念矩陣」
+     (與 Preview 可比較、被 equivalence 測試使用,完全不知道 pdf-lib
+     的 XObject 繪圖細節),新增 `computeXObjectDrawMatrix()` 在概念矩陣
+     基礎上疊加 pdf-lib 專屬修正,只被 `exportProjectToPdf()` 使用。
+  B. 直接讓 `computeExportContentMatrix()` 就地加上這些修正,equivalence
+     測試改成比較「修正後」的矩陣。
+
+### Selected Solution
+(1) A。(2) A。
+
+### Reason
+(1)A 案是這次真正抓出 bug 的方法,且把「口頭推理」與「實測驗證」的落差
+攤在陽光下——過程中我自己對「圖片是否需要額外翻轉」的判斷至少反覆修正
+兩次,每次都是靠實測結果而非重新推理才發現前一次推理錯在哪裡,證明 B 案
+（純手推）在這個問題上不可靠,C 案則放棄了「唯一矩陣函式」的既有架構
+投資,且逐一試探高階 API 一樣需要肉眼/實測驗證,不會比 A 案省事。
+(2)A 案讓 §23.3 那個「本專案最重要的一條驗收」保持純粹——它驗證的是
+「Preview 與 Export 對『內容該出現在紙上哪個位置』的計算方式一致」,這個
+問題本質上與「pdf-lib 的 XObject 內部怎麼定義它自己的原生座標系」無關,
+硬要把兩者混在一起會讓 equivalence 測試失去單一職責,日後 pdf-lib 版本
+更新若原生座標系定義有變,不應該連 Preview/Export 的概念一致性都要重新
+驗證一遍。B 案省了一個函式,但把兩個不同層次的正確性(「位置算得對不對」
+vs「怎麼把這個位置交給 pdf-lib 這個特定函式庫」)綁在一起,任何一邊改動
+都會互相干擾。
+
+### Consequences
+- `src/export.js`:`computeExportContentMatrix()` 維持純概念矩陣(§23.3
+  equivalence 測試持續使用,不受影響,104 個案例全數通過如初);新增
+  `computeXObjectDrawMatrix()`,依 `source.kind` 疊加修正——圖片疊加
+  `pdfPageFlipMatrix(contentH) ∘ scaleXY(contentW, contentH)`(先縮放
+  再翻轉),PDF 頁面疊加單獨的 `pdfPageFlipMatrix(contentH)`;
+  `exportProjectToPdf()` 改用 `computeXObjectDrawMatrix()` 的結果餵給
+  `concatTransformationMatrix`。
+- 新增的迴歸測試釘住這次實測校準出的精確數值,而非只驗證「有沒有規律」:
+  `src/export.test.js` 兩個 `computeXObjectDrawMatrix()` 純函式測試(滿版
+  stretch 情境下,圖片應得到 `[200,0,0,200,0,0]`、PDF 頁面應得到單位矩陣
+  `[1,0,0,1,0,0]`);`src/export-real-pdf-lib.test.js` 新增一個測試,直接
+  解碼真正輸出 PDF 的內容流、抓出實際寫入的 `cm` operator 六個數值,與
+  `computeXObjectDrawMatrix()` 的計算結果比對,把「公式本身」與「pdf-lib
+  實際吃到的位元組」串在一起驗證。
+- `dev/export.html` 的 Playwright 驗證新增「四象限測色」與「文字位置」
+  兩種真實渲染回讀檢查(見 change_log),往後任何人若打算「簡化」或
+  「重構掉」`computeXObjectDrawMatrix()` 的兩個分支,都應該先重新跑這條
+  瀏覽器驗證,而不是只看單元測試是否還過。
+
+### Future Review Conditions
+若 pdf-lib 升級版本後改變了 `embedPage`/`embedPng`/`embedJpg` 的
+`boundingBoxAdjustedMatrix`/Image XObject 原生座標系定義,需要重新走一次
+本決議(1)A 的實測校準流程,不能假設既有公式繼續適用。

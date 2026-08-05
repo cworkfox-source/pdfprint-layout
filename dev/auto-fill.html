@@ -72,7 +72,7 @@
   import { computePaperPreviewLayout, resolveZoom, renderPaper, renderSlots, renderSlotContent, computeSlotPx } from '/src/preview.js';
   import { generatePresetSlots, createSlotsFromRects, listPresetIds } from '/src/layout.js';
   import { detectMixedSourceSizes } from '/src/auto-fill.js';
-  import { autoFillAction, addPageAction, deletePageAction, duplicatePageAction, movePageAction } from '/src/reducers.js';
+  import { autoFillAction, addPageAction, deletePageAction, duplicatePageAction, movePageAction, addSourceAction } from '/src/reducers.js';
   import { createSourceEngine } from '/src/sources.js';
   import { renderPdfPageThumbnail, decodeImage, renderImageThumbnail, renderPdfPagePreview, renderImagePreview } from '/src/render-adapters.js';
   import { createBinaryStore } from '/src/binary-store.js';
@@ -272,11 +272,16 @@
       try {
         if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
           const newSources = await engine.loadPdfFile(file, { pdfjsLib, pageRange: 'all' });
-          for (const s of newSources) { sources.set(s.id, s); renderTile(s); }
+          for (const s of newSources) {
+            sources.set(s.id, s);
+            store.commit(addSourceAction(s), null); // §5.1 — keep AppState.sources in sync too
+            renderTile(s);
+          }
           log(`載入 PDF ${file.name}：${newSources.length} 頁`, true);
         } else {
           const s = await engine.loadImageFile(file);
           sources.set(s.id, s);
+          store.commit(addSourceAction(s), null);
           renderTile(s);
           log(`載入圖片 ${file.name}`, true);
         }

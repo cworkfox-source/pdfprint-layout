@@ -181,10 +181,27 @@ export function boundingBoxOfTransformedRect(matrix, w, h) {
 }
 
 // --- PDF coordinate space (§6.2) ---------------------------------------
-// The ONLY place the model's top-down Y axis flips to PDF's bottom-up Y
-// axis. Nothing else in the codebase may do this conversion.
+// The ONLY two places the model's top-down Y axis flips to PDF's bottom-up
+// Y axis (Phase 7 Export is the first real caller of either). Nothing else
+// in the codebase may do this conversion.
+
+// For a single axis-aligned rect (e.g. a Slot's own clip boundary, which
+// is never itself rotated — only its CONTENT can be, via slotContentMatrix's
+// `rotation`).
 export function modelYToPdfY(modelY, elementHeightPt, paperHeightPt) {
   return paperHeightPt - modelY - elementHeightPt;
+}
+
+// For a full affine matrix (a Slot's CONTENT transform, which may include
+// rotation/flip) — naively flipping just a translation component after the
+// fact does not carry rotation through correctly. Composing this matrix in
+// FRONT of any model-space matrix (`multiply(pdfPageFlipMatrix(h), M)`)
+// generalizes modelYToPdfY() correctly: for an unrotated rect this produces
+// the exact same bottom-edge Y value modelYToPdfY() would (verified in
+// geometry.test.js), but it also correctly carries rotation/flip through,
+// which modelYToPdfY()'s single-height parameter cannot express.
+export function pdfPageFlipMatrix(paperHeightPt) {
+  return [1, 0, 0, -1, 0, paperHeightPt];
 }
 
 // --- Source /Rotate normalization (§14.3) -------------------------------

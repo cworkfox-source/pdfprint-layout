@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore } from './store.js';
-import { createAppState, createPage, createSlot } from './model.js';
+import { createAppState, createPage, createSlot, createSource } from './model.js';
 import {
   setPageSlotsAction,
   moveSlotsAction,
@@ -30,6 +30,8 @@ import {
   deletePageAction,
   duplicatePageAction,
   movePageAction,
+  addSourceAction,
+  removeSourceAction,
 } from './reducers.js';
 
 function makeTwoPageState() {
@@ -326,4 +328,23 @@ test('deletePageAction refuses to remove the last remaining page (integration: s
   const before = store.getState();
   assert.throws(() => store.commit(deletePageAction('only'), null), /last remaining page/);
   assert.equal(store.getState(), before);
+});
+
+// --- Sources (§5.1/§5.2, gap found in Phase 7 — see decision_log D-016) ----
+
+test('addSourceAction appends a Source to AppState.sources', () => {
+  const store = createStore(makeTwoPageState());
+  const source = createSource({ id: 'src-1', kind: 'image', naturalWidth: 10, naturalHeight: 10 });
+  store.commit(addSourceAction(source), null);
+  assert.deepEqual(store.getState().sources, [source]);
+});
+
+test('removeSourceAction removes a Source by id, leaving others untouched', () => {
+  const store = createStore(makeTwoPageState());
+  const a = createSource({ id: 'src-a', kind: 'image', naturalWidth: 1, naturalHeight: 1 });
+  const b = createSource({ id: 'src-b', kind: 'image', naturalWidth: 1, naturalHeight: 1 });
+  store.commit(addSourceAction(a), null);
+  store.commit(addSourceAction(b), null);
+  store.commit(removeSourceAction('src-a'), null);
+  assert.deepEqual(store.getState().sources, [b]);
 });
