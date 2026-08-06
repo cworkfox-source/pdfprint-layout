@@ -3,10 +3,11 @@
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
 Visual Page Imposition Designer, public repo.
 Phase 0–12 complete; `docs/remediation_plan.md` (R-1~R-7) fully closed.
-`index.html` (2,954,661 bytes) now builds from the real product UI
-`app.html`, not a dev harness. 561 tests pass; checkout is `master`.
-`docs/ui_improvement_plan.md` U-0~U-4 已執行;簡易/詳細模式、批次清除、
-Esc/空白處取消選取與 Properties Panel resizer 已接線,尚未提交。
+`index.html` (2,955,569 bytes) builds from `app.html`. 561 tests pass;
+checkout is `master`. `docs/ui_improvement_plan.md` U-0~U-4 已執行;
+簡易/詳細模式、批次清除、Esc/空白處取消選取、Properties Panel resizer、
+Slot 點選編輯/刪除、文字框拖曳、多檔選取全部生效(見 change_log 修正
+`#file-input-sources` live-FileList bug)皆已接線,尚未提交。
 
 ## Current Version
 Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 11 Standalone Build 完成
@@ -470,14 +471,15 @@ work 直接延續在該分支上。另有一個更早、未整合的分支
   - 12a 骨架:三區 CSS Grid + 頂部工具列(開啟/儲存專案、Undo/Redo、
     縮放、列印、校正頁、匯出 PDF)+ 中央 Paper Canvas,`preview.js`
     全部 DOM adapter 首次在單一畫面全部接齊。
-  - 12b Source Gallery:PDF/圖片/SVG 載入、頁碼範圍、拖曳到 Slot、刪除
+  - 12b Source Gallery:PDF/圖片/SVG 載入、頁碼範圍、縮圖或原始檔直接拖曳到
+    Slot（多選圖片全部保留、PDF 依頁碼範圍逐頁建立 Source）、刪除
     (含 §12.6 記憶體釋放與 Slot 懸空參照清理)、§25 Annotations 遺失
     提示、加密 PDF 友善錯誤訊息。
   - 12c Properties Panel:依選取切換 Paper+文件設定/單一 Slot/單一
     Text Box/多選(對齊/分布/等尺寸/§10.4 批次套用)四種面板;新增
     `src/reducers.js` 的 `setPaperAction`/`setProjectNameAction`(填補
     先前缺口)。
-  - 12d 畫布編輯互動:Select/Create 模式、拖曳移動與 8 個縮放 handle
+  - 12d 畫布編輯互動:Select/Create 模式、Slot/Text Box 拖曳移動與 8 個縮放 handle
     (皆含 Snap)、框選多選、拖曳建立格位、水平/垂直分割、合併——邏輯
     移植自已驗證過的 `dev/free-layout.html`(Phase 4)。
   - 12e 頁面管理 + Auto Fill + 專案系統:Output Pages 新增/複製/刪除/

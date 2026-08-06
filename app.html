@@ -143,10 +143,10 @@
     padding: 1px 5px; background: var(--bg);
   }
   .pl-paper { background: #fff; }
-  .pl-slot { border: 1px solid rgba(0,0,0,0.35); cursor: pointer; }
+  .pl-slot { border: 1px solid rgba(0,0,0,0.35); cursor: pointer; touch-action: none; }
   .pl-slot.drop-target { outline: 2px solid var(--accent); outline-offset: -2px; background: rgba(37,99,235,0.08); }
   .pl-slot.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .pl-text-box { pointer-events: auto !important; cursor: pointer; }
+  .pl-text-box { pointer-events: auto !important; cursor: move; touch-action: none; }
   .pl-text-box.selected { outline: 2px dashed var(--accent); outline-offset: 1px; }
   .pl-slot.locked { cursor: not-allowed; }
   .rl-handle {
@@ -283,6 +283,7 @@
           </div>
           <input id="file-input-sources" class="visually-hidden" type="file" multiple
                  accept=".pdf,.png,.jpg,.jpeg,.webp,.svg,image/*,application/pdf,image/svg+xml">
+          <p class="hint-text" id="slot-drop-hint">Drag a source tile onto a page slot to place it. You can also drop a file directly onto a slot.</p>
         </div>
         <div id="gallery-list"></div>
         <div id="gallery-empty">尚未載入任何來源。</div>
@@ -676,6 +677,11 @@
     for (const el of contentEl.querySelectorAll('.pl-slot, .pl-text-box')) {
       const id = el.dataset.slotId || el.dataset.textBoxId;
       el.classList.toggle('selected', st.selection.includes(id));
+      // The element is rebuilt each render, so attach the click-to-edit
+      // handler here instead of retaining a stale node reference.
+      el.addEventListener('click', (event) => {
+        if (!event.shiftKey && !state().selection.includes(id)) setSelection([id]);
+      });
       if (el.dataset.slotId) {
         const slotForEl = page.slots.find((s) => s.id === el.dataset.slotId);
         el.classList.toggle('locked', !!slotForEl?.locked);
@@ -1453,6 +1459,7 @@
 
   async function handleSourceFiles(fileList) {
     const pageRange = $('page-range-input').value.trim() || 'all';
+    const loadedSources = [];
     for (const file of fileList) {
       const lowerName = file.name.toLowerCase();
       try {
@@ -1463,32 +1470,38 @@
           } catch (err) {
             throw new Error(describePdfLoadError(err));
           }
-          for (const s of newSources) { sources.set(s.id, s); store.commit(addSourceAction(s), null); }
+          for (const s of newSources) {
+            sources.set(s.id, s);
+            store.commit(addSourceAction(s), null);
+            loadedSources.push(s);
+          }
           toast(`已載入「${file.name}」(${newSources.length} 頁)`);
           checkForAnnotations(file).then((found) => {
             if (found) toast(`「${file.name}」含有超連結／表單欄位／註解,匯出後這些內容將會遺失(僅保留視覺內容)`, true);
           });
         } else if (file.type === 'image/svg+xml' || lowerName.endsWith('.svg')) {
           const s = await engine.loadSvgFile(file);
-          sources.set(s.id, s); store.commit(addSourceAction(s), null);
+          sources.set(s.id, s); store.commit(addSourceAction(s), null); loadedSources.push(s);
           toast(`已載入「${file.name}」`);
         } else {
           const s = await engine.loadImageFile(file);
-          sources.set(s.id, s); store.commit(addSourceAction(s), null);
+          sources.set(s.id, s); store.commit(addSourceAction(s), null); loadedSources.push(s);
           toast(`已載入「${file.name}」`);
         }
       } catch (err) {
         toast(`載入「${file.name}」失敗:${err.message}`, true);
         console.error(err);
       }
+      render();
     }
-    render();
+    return loadedSources;
   }
 
   $('btn-load-files').addEventListener('click', () => $('file-input-sources').click());
   $('file-input-sources').addEventListener('change', (e) => {
-    if (e.target.files.length) handleSourceFiles(e.target.files);
+    const files = [...e.target.files];
     e.target.value = '';
+    if (files.length) handleSourceFiles(files);
   });
 
   // --- Drag Source tile onto a Slot (event delegation survives renderSlots()
@@ -1505,14 +1518,19 @@
     const slotEl = e.target.closest('.pl-slot');
     if (slotEl) slotEl.classList.remove('drop-target');
   });
-  paperHost.addEventListener('drop', (e) => {
+  paperHost.addEventListener('drop', async (e) => {
     const slotEl = e.target.closest('.pl-slot');
     if (!slotEl) return;
     e.preventDefault();
     slotEl.classList.remove('drop-target');
-    const sourceId = e.dataTransfer.getData('text/plain');
+    let sourceId = e.dataTransfer.getData('text/plain');
     const slotId = slotEl.dataset.slotId;
-    if (!sourceId || !slotId) return;
+    if (!slotId) return;
+    if (!sourceId && e.dataTransfer.files?.length) {
+      const loadedSources = await handleSourceFiles(e.dataTransfer.files);
+      sourceId = loadedSources[0]?.id ?? '';
+    }
+    if (!sourceId) return;
     store.commit(setSlotSourceAction(currentPage().id, slotId, sourceId), null);
   });
 
@@ -1522,9 +1540,12 @@
   // (free-layout.html hard-codes one PAGE_ID). Selection is a flat array of
   // ids; Slot ids and Text Box ids share it, distinguished by their
   // `slot-`/`text-` prefix (same convention 12c already established for the
-  // Properties Panel). Text Boxes are click-to-select only in this step —
-  // drag/resize for Text Box content is not in Phase 12's scope.
+  // Properties Panel). Text Boxes share the Slot selection model and can be
+  // dragged, while their sizing remains controlled by the properties panel.
   function setSelection(ids) {
+    const changed = ids.length !== state().selection.length || ids.some((id, index) => id !== state().selection[index]);
+    const focused = document.activeElement;
+    if (changed && focused && $('properties-panel-body').contains(focused)) focused.blur();
     store.commit(setSelectionAction(ids), null, { historyEntry: false });
   }
 
@@ -1601,6 +1622,11 @@
       } else {
         setSelection([textId]);
       }
+      const movingIds = state().selection.filter((id) => id.startsWith('text-'));
+      if (movingIds.includes(textId)) {
+        dragState = { type: 'move-text', pageId, textIds: movingIds, clientX: e.clientX, clientY: e.clientY };
+        tryCapturePointer(e.pointerId);
+      }
       return;
     }
 
@@ -1669,6 +1695,18 @@
         dragState.clientX = e.clientX;
         dragState.clientY = e.clientY;
       }
+      return;
+    }
+
+    if (dragState.type === 'move-text') {
+      const { dx, dy } = normDeltaFromPointer(e, dragState);
+      store.commit(
+        moveTextBoxesAction(dragState.pageId, dragState.textIds, dx, dy),
+        null,
+        { coalesceKey: `move-text:${dragState.textIds.join(',')}` },
+      );
+      dragState.clientX = e.clientX;
+      dragState.clientY = e.clientY;
       return;
     }
 

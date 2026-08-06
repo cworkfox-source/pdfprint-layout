@@ -466,6 +466,9 @@ PDF → 取得頁數 → 建立 Source Page（含 mediaBox / cropBox / rotate）
 ### 12.4 [M] Source Gallery
 
 顯示縮圖、檔名、PDF 頁碼；支援多選、全選、刪除、旋轉、翻轉、複製、拖曳到 Canvas。
+多選檔案時每張圖片皆建立一個 Source，PDF 依指定頁碼範圍（預設全部）建立一個
+Source/頁。使用者可從左欄拖曳縮圖，或直接把檔案拖放到 Slot；後者置入第一個成功
+讀入的 Source，其餘讀入內容仍完整保留於 Source Gallery。
 
 ### 12.5 [M] 大型 PDF 效能
 
@@ -890,7 +893,7 @@ Single HTML、Offline、No CDN、No Server 的正式 build 與跨瀏覽器驗證
    Paper／Slot／Text／多選 屬性面板；「文件」分頁收納 Bleed/Safe
    Area/Header-Footer/Page Number/Watermark（含圖片來源選取 UI）/Crop
    Marks；多選批次套用 fit/rotation/scale/alignment（§10.4）。
-4. **12d 畫布編輯互動**：Select/Create 模式、多選、拖曳移動、縮放
+4. **12d 畫布編輯互動**：Select/Create 模式、多選、拖曳移動（Slot 與 Text Box）、縮放
    handle、Snap、分割/合併/刪除/複製，沿用 Phase 4 已驗證的互動邏輯。
 5. **12e 頁面管理 + Auto Fill + 專案系統整合**：Output Pages 管理、Auto
    Fill 面板（含 §11.4 混合尺寸提示）、專案存讀 + relink 流程 UI、

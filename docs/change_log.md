@@ -2,6 +2,73 @@
 
 > Older entries: docs/logs/ (archive, do not load at startup)
 
+## 2026-08-06 18:10 | Product UI | Fixed multi-file source selection dropping all but the first file
+
+### Type
+Bugfix
+
+### Summary
+Selecting multiple files via the Source Gallery's "載入 PDF / 圖片 / SVG"
+button silently loaded only the first file; images 2..N (and pages from
+additional PDFs) never became Sources. Root cause: the `change` handler on
+`#file-input-sources` passed the live `FileList` (`e.target.files`) by
+reference into the async `handleSourceFiles()`, then immediately reset
+`e.target.value = ''`. Since `handleSourceFiles()` `await`s inside its
+`for...of` loop on the very first file, control returned to the `change`
+handler before the loop finished; clearing `input.value` truncates the
+*live* FileList out from under the still-running iterator, so every file
+after the first is skipped with no error.
+
+### Files Changed
+- app.html — `#file-input-sources` `change` handler now snapshots
+  `[...e.target.files]` into a plain array before resetting `input.value`,
+  matching the pattern the `#file-input-relink` handler (added in 12e)
+  already used correctly.
+- docs/change_log.md, docs/project_status.md — this entry / TL;DR update.
+
+### Reason
+User reported 2026-08-06: (1) slots not clickable to edit, (2) text boxes
+not draggable, (3) multi-file selection not showing all images / PDFs not
+reading by content pages, (4) slots not clickable to delete. (1), (2), and
+(4) were already fixed by uncommitted work earlier the same day (see the
+entry immediately below, "Restored Slot editing/deletion, Text Box
+dragging, and direct file drops") but that entry's claim that "every
+selected file is retained" was not actually verified against real
+multi-file input — browser reproduction here showed only 1 of 3 selected
+images loading.
+
+### Impact Analysis
+Isolated to the Source Gallery's file-picker entry point; drag-and-drop
+onto a Slot (`paperHost` `drop` handler) and the Project Relink dialog's
+file input were unaffected — neither resets an `<input>`'s `.value` while
+still holding a reference to its live `FileList`.
+
+### Verification
+`npm.cmd test`: 561/561 passed. `npm.cmd run build`: index.html
+2,955,569 bytes. Browser smoke (`app.html` via dev server, synthetic
+`File`/`DataTransfer` + real `change`/`PointerEvent` sequences):
+- Selecting 3 synthetic PNGs in one `change` event before the fix loaded
+  1 of 3 into `state.sources`; after the fix, 3 of 3.
+- Re-verified the other three reported issues on the same build: clicking
+  a Slot updates `state.selection` and renders "格位屬性" with a working
+  刪除 button (4→3 slots); dragging a Text Box via `pointerdown`/
+  `pointermove`/`pointerup` moves its `x`/`y` in `state`.
+- `read_console_messages`: 0 errors throughout.
+
+## 2026-08-06 | Product UI | Restored Slot editing/deletion, Text Box dragging, and direct file drops
+
+### Type
+Bugfix / UI / Docs
+
+### Summary
+Selecting a Slot now blurs a stale Properties Panel control so Slot Properties and Delete render immediately. Text Boxes can be dragged; every selected file is retained and every selected PDF page becomes a Source.
+
+### Files Changed
+- app.html, index.html, docs/plan.md, docs/project_status.md
+
+### Verification
+npm.cmd test: 561/561 passed; npm.cmd run build: index.html 2,955,569 bytes. Browser smoke: selected-slot delete succeeded; a Text Box drag moved from x=452.17/y=515.19 to x=492.17/y=545.19.
+
 ## 2026-08-06 | Docs | Rotated 2 entries (rotation-record and 12:00 R-1 spec-amendment entry) to docs/logs/change_log_2026.md | wc -l verified (831 lines active after rotation, exceeds 400 because the 10-entry retention floor takes precedence)
 
 ## 2026-08-06 13:59
