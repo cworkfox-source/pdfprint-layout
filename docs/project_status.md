@@ -2,21 +2,27 @@
 
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
 Visual Page Imposition Designer,public repo
-https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-9 已完成**
-(引擎層:geometry/store/model、Source Engine、Layout Engine、Free Layout
-Designer、Source Placement、Auto Imposition、PDF Export、Print Path、
-**Project System**〔存/讀 `.json`、雜湊比對 relink 來源、Template 存/套用、
-schemaVersion migration、載入專案重置 Undo 歷史,見 D-018〕,437 個單元
-測試 + 瀏覽器實測(完整存檔→重新載入→重新選取來源→relink→續編輯
-往返)皆通過)。下一步:Phase 10(Print Aids 進階與第二階段功能)。無
-blocker。
+https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-10 已完成**
+(引擎層 Phase 0-9,加上 **Print Aids 進階功能**〔Bleed/Safe Area/Header-
+Footer/Page Number/Text Box/浮水印/SVG Source/Align & Distribute/鍵盤
+快捷鍵/內建 Template Library,見 D-019〕),543 個單元測試 + 瀏覽器實測
+(dev/print-aids.html,含真實 pdf-lib 匯出結構驗證)皆通過。下一步:
+Phase 11(Standalone Build)。無 blocker。目前工作分支為
+`claude/phase-5-handling-wi8vcd`(非 master,見 Current Version)。
 
 ## Current Version
-Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 9 完成
+Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 10 完成
 (含 Phase 4 遺留的鎖定/解鎖、Z-order [M] 缺口補完見 D-013、
 AppState.sources 從未被寫入的缺口補完見 D-015、Crop Marks 預設值與繪製
 範圍見 D-017、AppState.templates 從未被寫入的缺口 + SCHEMA_VERSION 遲到
-提升見 D-018;無產品 UI,僅引擎與 dev 檢查頁)
+提升見 D-018、Phase 10 的八組 Print Aids 判斷點見 D-019;無產品 UI,僅
+引擎與 dev 檢查頁)。**分支說明**:本機 checkout 原本落在 `master`(僅
+Phase 0-1),Phase 1-9 實際已在 GitHub 遠端分支
+`claude/phase-5-handling-wi8vcd` 完成但未合併回 `master`;Phase 10 起
+work 直接延續在該分支上。另有一個更早、未整合的分支
+`claude/file-download-local-rulgho`(僅一個 commit,`src/download.js`
+下載工具函式,未被任何 Phase 2-10 程式碼使用)——若日後需要瀏覽器端
+下載工具,應先檢查該檔案是否可重用,而非重新實作。
 
 ## Project Goals
 純前端、零後端、可離線、可打包為單一 HTML 的視覺化拼版工具。使用者載入 PDF 或
@@ -31,6 +37,9 @@ AppState.sources 從未被寫入的缺口補完見 D-015、Crop Marks 預設值�
 - 高品質 PDF Export(pdf-lib embedPage 保留向量與可選取文字)
 - 列印經由匯出的同一份 PDF,確保列印與匯出一致;含 100 mm 校正頁
 - 專案 / 版型儲存與載入、Undo / Redo
+- Print Aids 進階功能:Bleed、Safe Area(僅預覽)、Header/Footer、Page
+  Number、Text Box、浮水印(文字/圖片)、SVG Source、多選對齊/分布、
+  鍵盤快捷鍵、內建 Template Library
 
 ## Completed Features
 - Phase −1 可行性 Spike(2026-08-05):`spike/dist/index.html` 於 `file://`
@@ -396,14 +405,72 @@ AppState.sources 從未被寫入的缺口補完見 D-015、Crop Marks 預設值�
     的舊專案 JSON,確認載入時 schemaVersion 正確 migrate 到 2 並補上
     `cropMarks` 預設值)全數通過,console 無錯誤。
 
+- Phase 10 Print Aids 進階與第二階段功能(2026-08-06):
+  - `src/model.js` — `createBleedSettings()`/`createSafeAreaSettings()`/
+    `createHeaderFooterSettings()`/`createPageNumberSettings()`/
+    `createWatermarkSettings()`(掛在 `Project` 上)、`createTextBox()`
+    (掛在 `Page.textBoxes[]`)、`SCHEMA_VERSION` 2→3。
+  - `src/print-aids.js`(新增)— §16 純幾何:`offsetRect()`(正值外擴
+    Bleed、負值內縮 Safe Area 共用一個原語)、
+    `computeHeaderFooterBandsPt()`/`computeTextAnchorInBand()`/
+    `formatPageNumber()`/`computePageNumberAnchorPt()`(Header/Footer/
+    Page Number 共用同一套邊界計算)、`computeWatermarkCenterPt()`/
+    `computeWatermarkMatrix()`/`computeAlignedTextOrigin()`(浮水印與
+    Text Box 共用的置中+旋轉矩陣,沿用 Slot 內容矩陣的 Y-down model
+    space 慣例)。
+  - `src/text-elements.js`(新增)— Text Box 的純 CRUD 原語(move/
+    resize/content/delete/duplicate/z-order),獨立於 Source/Slot 系統
+    之外(見 D-019)。
+  - `src/reducers.js` — Phase 10 設定的合併式 action(比照既有
+    `setCropMarksAction` 慣例)、Text Box action、Align/Distribute
+    action。
+  - `src/preview.js` — Bleed/Safe Area 引導線、Header/Footer/Page
+    Number/Text Box/浮水印的 DOM 算繪,全部重用 `print-aids.js` 的純
+    函式(僅單位從 pt 換成 px)。
+  - `src/export.js` — Bleed clip 擴張(僅裁切邊界變動,內容定位不變)、
+    Header/Footer/Page Number 走 pdf-lib 高階 `drawText()`(無旋轉需求)、
+    Text Box/浮水印走低階 operator(`pushGraphicsState`/
+    `concatTransformationMatrix`/`beginText`/`setFontAndSize`/
+    `setTextMatrix`/`showText`/`popGraphicsState`,理由:pdf-lib 高階
+    `rotate:` 選項的旋轉樞紐是文字/圖片自身錨點而非視覺中心,且無法
+    表達 Y-flip 疊加旋轉後行列式為 -1 的鏡射矩陣)、浮水印透明度透過
+    `page.maybeEmbedGraphicsState()`(pdf-lib 內部機制,與其高階 API
+    的 `opacity` 選項共用同一套 ExtGState)。中文字型支援範圍(先只
+    ASCII,不加 fontkit)為使用者本次對話明確決定,見 D-019。
+  - `src/sources.js`/`src/render-adapters.js` — SVG Source(kind:
+    `'svg'`):`parseSvgIntrinsicSize()`(解析 `<svg>` 根標籤 width/
+    height 或 viewBox)、`computeSvgRasterSize()`(固定 4 倍放大,長邊
+    上限 3000px)、`loadSvgFile()`、瀏覽器端 `rasterizeSvg` 系列(Image
+    + Canvas 直接以目標解析度繪製,不像點陣圖有「原生像素」概念)。
+    Export 端 `embedSource()` 一律光柵化為 PNG 再 `embedPng()`(pdf-lib
+    完全沒有 SVG embed 路徑,不像 WEBP 只是不支援的編碼)。
+  - `src/free-layout.js` — §9.6 Align(左右上下對齊、水平/垂直置中,
+    皆以選取範圍自身 bounding box 為基準)、Match Size(等寬/等高/等
+    尺寸,以陣列第一個目標為準)、Distribute(水平/垂直平均分布,採
+    「等間距邊緣」而非「等間距中心」,首尾固定不動)。
+  - `src/keymap.js`(新增)— §18.3 `resolveShortcut()`(Delete/Ctrl+Z/
+    Ctrl+Y(含 Ctrl+Shift+Z)/Ctrl+C/Ctrl+V/Ctrl+A/Arrow/Shift+Arrow)+
+    `nudgeDelta()`,純函式、不含任何 `addEventListener`。
+  - `src/template-library.js`(新增)— §17.3 內建 Template Library
+    4 個範例(`A4_上2下1`、`A4_照片4格`、`A3_6格`、`證件照8格`),全部
+    透過既有 §9 Layout Engine 純函式產生;`證件照8格` 是均分 4×2
+    網格,非真正符合證件照物理尺寸的排版(已記錄為簡化,見 D-19)。
+  - `dev/print-aids.html`(新增)— Phase 10 dev harness。
+  - 106 個新測試(共 543 個,含先前因未 fetch vendor 而略過的 9 個
+    real-pdf-lib 測試,本次一併恢復執行)+ 瀏覽器實測(過程中發現並
+    修正一個真實 bug:`computeSlotPx()` 回傳 `{width,height}` 而
+    `computeBleedExpandedRect`/`computeSafeAreaRect` 預期 `{w,h}`,原本
+    會靜默產生 `NaN` 座標;修正後 Bleed/Safe Area 引導線座標與手算值
+    精確吻合)全數通過。Watermark/Text Box 旋轉矩陣的 Preview↔Export
+    視覺一致性透過 `export-real-pdf-lib.test.js` 對真實 `cm` 矩陣做
+    迴歸驗證(90° 旋轉 b 分量 ≈ ±1),不僅憑手動推導,細節見 D-019。
+
 ## Features In Development
-Phase 10(Print Aids 進階與第二階段功能)尚未開始:Bleed、Safe Area、
-Page Number、Header/Footer、Text Box、浮水印、SVG、進階對齊、快捷鍵、
-Template Library(內建常用版型集合,§17.3 [S],Phase 9 僅實作使用者自存
-Template 的 [M] 核心需求,未含此項)。見 `docs/plan.md` §10.4/§16。
+無。Phase 10 已完成,下一步為 Phase 11(Standalone Build)。
 
 ## Planned Features
-見 `docs/plan.md` §22 開發階段。Phase 10 → Phase 11。
+見 `docs/plan.md` §22 開發階段。Phase 11(單檔離線 esbuild 正式 build,
+跨瀏覽器驗證)是 §22 最後一個階段。
 
 ## Known Issues
 - plan.md §9.1 的「2+2」preset 未定義其與 2×2 grid(=4up)的幾何差異,
@@ -443,10 +510,11 @@ Template 的 [M] 核心需求,未含此項)。見 `docs/plan.md` §10.4/§16。
   英文說明文字,與目前 Project 的紙張設定/UI 語言無關——這是刻意的範圍
   控制(校正頁測試的是印表機本身,不是使用者版面;中文需要 fontkit 內嵌
   字型子集,§16 已明訂為第二階段議題),不是遺漏,見 decision_log D-017。
-- Crop Marks 的 `gapPt`(與 Slot 邊緣的距離)目前語意上等同「與內容的
-  距離」,但 MVP 沒有 Bleed(出血,§16 [S])概念。日後若加入 Bleed,需要
-  重新檢視這個距離該從 Slot 邊緣算起還是從出血邊界算起,見 decision_log
-  D-017 Future Review Conditions。
+- 【已解決,Phase 10】Crop Marks 的 `gapPt` 與 Bleed 的關係:確認 Crop
+  Marks 仍固定從 Slot 的**原始(未出血)邊緣**算起,Bleed 只影響 Export
+  端的裁切邊界擴張(`computeBleedClipRectPt()`),不影響 Crop Marks 標記
+  的位置——Crop Marks 標的是「裁切線」本身,理應不隨出血區大小改變,見
+  decision_log D-019。
 - `AppState.templates` 在 Phase 0-8 期間從未被任何 reducer 寫入(與
   D-015 的 `AppState.sources` 同一類缺口),直到 Phase 9 才發現並修正
   (新增 `saveTemplateAction`/`deleteTemplateAction`/`applyTemplateAction`),
@@ -463,9 +531,24 @@ Template 的 [M] 核心需求,未含此項)。見 `docs/plan.md` §10.4/§16。
   沒有雜湊或比對失敗的 Source 會停留在 `unresolved`,對應 Slot 在
   Export 時會拋出「unknown source/no original bytes」錯誤,直到使用者
   正確重新選取為止。
-- Layout Template Library(§17.3 [S],內建常用版型集合)未實作——Phase 9
-  只做了使用者自存 Template 的 [M] 核心需求(save/apply/delete),內建
-  範本集合留給 Phase 10,見 decision_log D-018。
+- 【已解決,Phase 10】Layout Template Library(§17.3 [S],內建常用版型
+  集合)已實作,見 `src/template-library.js` 與上方 Completed Features。
+- 文字功能(Header/Footer、Page Number、Text Box、浮水印文字)目前**只
+  支援 ASCII 字元**——pdf-lib StandardFonts 沒有中日韓字符,支援中文需要
+  `fontkit` 內嵌字型子集(§16 已明訂會顯著增加打包體積)。這是使用者
+  本次對話明確做出的範圍決定(非遺漏),見 decision_log D-019。
+- Bleed 對 `fitMode: 'contain'` 的 Slot 沒有實際視覺效果(出血區維持
+  空白)——Bleed 只擴張 Export 端的裁切邊界,不連動改變內容的定位/縮放,
+  'cover' fit(本來就會溢出裁切)才能真正把內容延伸進出血區。屬已知
+  設計限制而非 bug,見 decision_log D-019。
+- 內建 Template Library 的 `證件照8格` 是均分 4×2 網格,**不是**真正符合
+  證件照物理尺寸(例如 3.5cm x 4.5cm)的排版,見 decision_log D-019。
+- 本機環境的瀏覽器自動化(Browser pane)在呼叫 pdf.js `page.render()`
+  (Canvas 重新渲染既有 PDF 供人工視覺驗證用)時會卡住不回應——已確認
+  同一行為在 Phase 8 已驗收過的既有 `dev/print.html` 也會發生,判定為
+  環境限制而非程式問題;Phase 10 因此改以「pdf-lib 重新載入解析 PDF
+  結構(operator/resource 存在性)」取代這一步視覺驗證,見 change_log
+  2026-08-06 10:00 的 Verification Result。
 
 ## Technical Architecture
 Vanilla HTML5 + ES6+,PDF.js 負責解析與預覽,pdf-lib 負責輸出,esbuild 打包成
@@ -558,6 +641,20 @@ creator 經 `store.commit()` 寫入,唯一合法的 mutation 路徑(§7.1)。Slo
 `src/store.js`,Source Engine 見 `src/sources.js`,專案存讀檔見
 `src/project-file.js`。詳見 `docs/plan.md` §5–§7、§12、§17。
 
+**Phase 10 新增欄位**(`SCHEMA_VERSION` 2→3,`migrateProjectData()` 已補
+v2→v3 遷移):`Project` 新增 `bleed`/`safeArea`/`headerFooter`/
+`pageNumber`/`watermark`(皆為合併式更新的設定物件,經
+`src/reducers.js` 的對應 action 寫入,同 `cropMarks` 慣例);`Page` 新增
+`textBoxes[]`(獨立於 `slots[]` 之外,見 decision_log D-019 為何不併入
+Source/Slot 系統),透過 `src/text-elements.js` 的純原語經
+`src/reducers.js` 的 Text Box action 寫入;`Template` 同步新增
+`textBoxes[]`(套用/存檔時比照 `slots` 一併整段取代)。Source 新增
+`kind: 'svg'`(§14 表格,pdf-lib 無 embed 路徑,Export 時一律光柵化為
+PNG)。`src/print-aids.js` 是 Phase 10 的唯一幾何模組(比照 §4.3「唯一
+geometry 模組」的精神,但 Bleed/Watermark/Text Box 這些新元素種類與
+`geometry.js` 原本服務的 Slot 內容矩陣是分開的關注點,故另立一個檔案而
+非塞進 `geometry.js` 本身)。
+
 ## API Structure
 N/A — 純前端,無後端 API。
 
@@ -576,5 +673,8 @@ registry tarball,見 decision_log D-015;Phase 7 起實際使用)、esbuild
 (2026-08-05 移除無關的 Python 打包 playbook)。
 
 ## Future Roadmap
-第二階段(plan §16、§25):雙面列印/背面對齊、SVG、文字框、浮水印、Bleed、
-Safe Area、Header/Footer、頁碼、進階對齊、快捷鍵、Template Library。
+Phase 11(plan §22 最後階段):Standalone Build——esbuild 打包成單一 IIFE
+`index.html`、`file://` 相容性驗證、跨瀏覽器測試(plan §19)。
+第二階段其餘未排入 Phase 10 的項目(plan §16、§25):雙面列印/背面對齊
+(名片、卡片類需求);中文 Text Box/浮水印(需要 fontkit 內嵌字型子集,
+見 decision_log D-019)。

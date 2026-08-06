@@ -93,6 +93,74 @@ export function computeImagePreviewSize(
   return { width: Math.round(naturalWidth * scale), height: Math.round(naturalHeight * scale) };
 }
 
+// --- SVG intrinsic size / raster sizing (§12, Phase 10) --------------------
+// SVG (§14 table: "pdf-lib 不支援 embed SVG —— 需光柵化") has no inherent
+// pixel bitmap the way an <img> decode gives one — its own "natural size" is
+// read from the root <svg> element's width/height (with unit conversion to
+// CSS px at 96dpi, matching browser default) or, failing that, its viewBox,
+// or finally the SVG spec's own 300x150 fallback when neither is present.
+// Regex-based (not a DOMParser) so this stays plain-string, Node-testable
+// pure logic — no DOM needed just to read two attributes off a root tag.
+
+const SVG_LENGTH_PX_PER_UNIT = Object.freeze({
+  px: 1, in: 96, cm: 96 / 2.54, mm: 96 / 25.4, pt: 96 / 72, pc: 16,
+});
+
+function parseSvgLength(str) {
+  if (!str) return null;
+  const m = str.trim().match(/^([\d.]+)\s*(px|mm|cm|in|pt|pc)?$/i);
+  if (!m) return null;
+  const unit = (m[2] ?? 'px').toLowerCase();
+  return parseFloat(m[1]) * SVG_LENGTH_PX_PER_UNIT[unit];
+}
+
+export function parseSvgIntrinsicSize(svgText) {
+  const rootMatch = svgText.match(/<svg\b[^>]*>/i);
+  if (!rootMatch) throw new Error('parseSvgIntrinsicSize: no <svg> root element found');
+  const root = rootMatch[0];
+
+  const width = parseSvgLength(root.match(/\bwidth="([^"]*)"/i)?.[1]);
+  const height = parseSvgLength(root.match(/\bheight="([^"]*)"/i)?.[1]);
+  if (width && height) return { width, height };
+
+  const viewBoxAttr = root.match(/\bviewBox="([^"]*)"/i)?.[1];
+  if (viewBoxAttr) {
+    const parts = viewBoxAttr.trim().split(/[\s,]+/).map(Number);
+    if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+      return { width: width ?? parts[2], height: height ?? parts[3] };
+    }
+  }
+
+  return { width: width ?? 300, height: height ?? 150 }; // SVG spec's own default intrinsic size
+}
+
+// Export-time raster resolution: `scale`x the intrinsic size (print quality
+// headroom for a vector source, unlike a fixed-resolution raster image),
+// capped at `maxLongEdgePx` so a huge or absurdly-scaled SVG can't blow up
+// memory. Phase 10 judgment call (decision_log D-019) — plan.md gives no
+// numbers for this.
+export const SVG_RASTER_SCALE = 4;
+export const SVG_RASTER_MAX_LONG_EDGE_PX = 3000;
+
+export function computeSvgRasterSize(
+  naturalWidth,
+  naturalHeight,
+  { scale = SVG_RASTER_SCALE, maxLongEdgePx = SVG_RASTER_MAX_LONG_EDGE_PX } = {},
+) {
+  if (!(naturalWidth > 0) || !(naturalHeight > 0)) {
+    throw new Error(`computeSvgRasterSize requires positive dimensions, got ${naturalWidth}x${naturalHeight}`);
+  }
+  let width = naturalWidth * scale;
+  let height = naturalHeight * scale;
+  const longEdge = Math.max(width, height);
+  if (longEdge > maxLongEdgePx) {
+    const clamp = maxLongEdgePx / longEdge;
+    width *= clamp;
+    height *= clamp;
+  }
+  return { width: Math.round(width), height: Math.round(height) };
+}
+
 // --- Concurrency-limited render queue (§12.5 "同時進行的 render 工作最多 3 個") --
 
 export function createRenderQueue(maxConcurrent = MAX_CONCURRENT_RENDERS) {
@@ -162,6 +230,9 @@ export function createSourceEngine(deps = {}) {
     renderImageThumbnail, // async ({ decoded, targetLongEdgePx }) => { url, width, height, release }
     renderPdfPagePreview, // async ({ page, targetDpi, maxLongEdgePx }) => { url, width, height, release }
     renderImagePreview, // async ({ bytes, naturalWidth, naturalHeight, maxLongEdgePx }) => { url, width, height, release }
+    decodeSvgText, // async (file) => svgText (Phase 10, §12/§14)
+    renderSvgThumbnail, // async ({ bytes, naturalWidth, naturalHeight, targetLongEdgePx }) => { url, width, height, release }
+    renderSvgPreview, // async ({ bytes, naturalWidth, naturalHeight, maxLongEdgePx }) => { url, width, height, release }
     onThumbnailReady, // (sourceId, { url, width, height }) => void
     onThumbnailError, // (sourceId, error) => void
   } = deps;
@@ -270,6 +341,18 @@ export function createSourceEngine(deps = {}) {
       }));
     }
 
+    if (source.kind === 'svg') {
+      if (!renderSvgPreview) throw new Error('createSourceEngine requires deps.renderSvgPreview for svg sources');
+      const bytes = binaryStore.get(source.docId);
+      if (!bytes) throw new Error(`ensurePreview: no original bytes for docId ${source.docId}`);
+      return enqueuePreview(source.id, () => renderSvgPreview({
+        bytes,
+        naturalWidth: source.naturalWidth,
+        naturalHeight: source.naturalHeight,
+        maxLongEdgePx: PREVIEW_CANVAS_MAX_LONG_EDGE_PX,
+      }));
+    }
+
     // blank/color/text (§5.2): no rendered content to preview (yet).
     return Promise.resolve(null);
   }
@@ -365,6 +448,41 @@ export function createSourceEngine(deps = {}) {
     return source;
   }
 
+  // §12.1/§14 — loads a single SVG file as one Source (kind: 'svg'). Unlike
+  // loadImageFile(), there's no bitmap decode step — naturalWidth/Height
+  // come from parseSvgIntrinsicSize() reading the file's own <svg> root
+  // tag, and thumbnail rendering is a RASTERIZE (Canvas + <img>) rather than
+  // a straight decode, since SVG is vector (§14 table: "pdf-lib 不支援
+  // embed SVG —— 需光柵化", the same reason export.js's embedSource()
+  // rasterizes it again at Export time, independently, at print resolution).
+  async function loadSvgFile(file) {
+    if (!decodeSvgText) throw new Error('createSourceEngine requires deps.decodeSvgText for svg sources');
+    if (!renderSvgThumbnail) throw new Error('createSourceEngine requires deps.renderSvgThumbnail for svg sources');
+
+    const fileName = file.name ?? 'unknown.svg';
+    const originalBuffer = await file.arrayBuffer();
+    const docId = makeDocId();
+    binaryStore.put(docId, originalBuffer);
+    const contentHash = await computeContentHash(originalBuffer);
+
+    const svgText = await decodeSvgText(file);
+    const { width, height } = parseSvgIntrinsicSize(svgText);
+    const source = createSource({
+      kind: 'svg',
+      fileName,
+      naturalWidth: width,
+      naturalHeight: height,
+      docId,
+      contentHash,
+    });
+    retainDoc(docId);
+    enqueueThumbnail(source.id, () =>
+      renderSvgThumbnail({ bytes: originalBuffer, naturalWidth: width, naturalHeight: height, targetLongEdgePx: THUMBNAIL_LONG_EDGE_PX }),
+    );
+
+    return source;
+  }
+
   function getThumbnail(sourceId) {
     return thumbnailCache.get(sourceId) ?? null;
   }
@@ -411,6 +529,7 @@ export function createSourceEngine(deps = {}) {
   return {
     loadPdfFile,
     loadImageFile,
+    loadSvgFile,
     getThumbnail,
     waitForThumbnail,
     waitForAllThumbnails,

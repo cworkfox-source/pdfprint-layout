@@ -9,6 +9,15 @@
 import { resolvePaperSizePt } from './model.js';
 import { sortByZOrder, slotContentMatrix } from './geometry.js';
 import { computeCropMarksForSlot } from './print.js';
+import {
+  computeBleedExpandedRect,
+  computeSafeAreaRect,
+  computeHeaderFooterBandsPt,
+  computeTextAnchorInBand,
+  formatPageNumber,
+  computePageNumberAnchorPt,
+  computeWatermarkImageSizePt,
+} from './print-aids.js';
 
 // Preview-only convention: at zoom 1.0, 1pt = 1 CSS px. This is purely a
 // Preview Renderer choice — Export (pdf-lib) never sees pixels, only pt
@@ -298,4 +307,205 @@ export function applyPrintPageSize(paperWidthPt, paperHeightPt, doc = document) 
   }
   styleEl.textContent = `@page { size: ${mm(paperWidthPt).toFixed(2)}mm ${mm(paperHeightPt).toFixed(2)}mm; margin: 0; }`;
   return styleEl;
+}
+
+// --- Print Aids (§16, Phase 10) ---------------------------------------------
+// DOM adapters only — every rect/anchor below comes from print-aids.js's
+// pure, UNIT-AGNOSTIC functions (§4.3), called here with PX instead of the
+// PT Export uses; nothing here recomputes that geometry itself.
+
+// computeSlotPx() (§13.1, Phase 1) returns `{x,y,width,height}`, but every
+// print-aids.js rect function uses `{x,y,w,h}` (matching export.js's
+// computeSlotAbsoluteRectPt convention) — this converts between the two so
+// callers below don't silently feed `undefined` width/height into the pure
+// math (caught live in the dev harness: guides rendered with NaN position).
+function slotPxToWH(slotPx) {
+  return { x: slotPx.x, y: slotPx.y, w: slotPx.width, h: slotPx.height };
+}
+
+// §16 Bleed guide — PREVIEW-ONLY visual aid (the actual clip expansion is
+// Export's job, export.js's computeBleedClipRectPt). One dashed outline per
+// Slot at its Bleed-expanded rect.
+export function renderBleedGuide(contentEl, slots, contentAreaWidthPx, contentAreaHeightPx, bleed, pxPerPt) {
+  for (const el of contentEl.querySelectorAll(':scope > .pl-bleed-guide')) el.remove();
+  if (!bleed?.enabled) return;
+  const bleedPx = bleed.sizePt * pxPerPt;
+  for (const slot of slots) {
+    const rect = computeBleedExpandedRect(slotPxToWH(computeSlotPx(slot, contentAreaWidthPx, contentAreaHeightPx)), bleedPx);
+    const el = document.createElement('div');
+    el.className = 'pl-bleed-guide';
+    el.style.position = 'absolute';
+    el.style.left = `${rect.x}px`;
+    el.style.top = `${rect.y}px`;
+    el.style.width = `${rect.w}px`;
+    el.style.height = `${rect.h}px`;
+    el.style.outline = '1px dashed rgba(255,140,0,0.9)';
+    el.style.pointerEvents = 'none';
+    contentEl.appendChild(el);
+  }
+}
+
+// §16 Safe Area guide — same PREVIEW-ONLY convention, inset instead of
+// expanded. Never has an export.js counterpart to stay geometrically in
+// sync with (§16: "僅畫面預覽，不列印、不匯出" — there is nothing to match).
+export function renderSafeAreaGuide(contentEl, slots, contentAreaWidthPx, contentAreaHeightPx, safeArea, pxPerPt) {
+  for (const el of contentEl.querySelectorAll(':scope > .pl-safe-area-guide')) el.remove();
+  if (!safeArea?.enabled) return;
+  const marginPx = safeArea.marginPt * pxPerPt;
+  for (const slot of slots) {
+    const rect = computeSafeAreaRect(slotPxToWH(computeSlotPx(slot, contentAreaWidthPx, contentAreaHeightPx)), marginPx);
+    const el = document.createElement('div');
+    el.className = 'pl-safe-area-guide';
+    el.style.position = 'absolute';
+    el.style.left = `${rect.x}px`;
+    el.style.top = `${rect.y}px`;
+    el.style.width = `${rect.w}px`;
+    el.style.height = `${rect.h}px`;
+    el.style.outline = '1px dashed rgba(0,170,0,0.9)';
+    el.style.pointerEvents = 'none';
+    contentEl.appendChild(el);
+  }
+}
+
+// Shared by Header/Footer/Page Number below: an absolutely-positioned text
+// element anchored at `anchor` (paper-relative px) and horizontally aligned
+// via `anchor.align` — CSS's own text measurement (via the `translate(-N%,
+// -50%)` idiom) stands in for the font-metrics math export.js's
+// drawAnchoredText() needs to do by hand, since the DOM already knows how
+// wide its own text is.
+function renderMarginBandText(paperEl, className, text, anchor, sizePt, pxPerPt) {
+  let el = paperEl.querySelector(`:scope > .${className}`);
+  if (!text) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('div');
+    el.className = className;
+    el.style.position = 'absolute';
+    el.style.whiteSpace = 'nowrap';
+    el.style.pointerEvents = 'none';
+    el.style.fontFamily = 'Helvetica, Arial, sans-serif';
+    paperEl.appendChild(el);
+  }
+  el.textContent = text;
+  el.style.fontSize = `${sizePt * pxPerPt}px`;
+  el.style.left = `${anchor.x * pxPerPt}px`;
+  el.style.top = `${anchor.y * pxPerPt}px`;
+  const xShift = anchor.align === 'center' ? '-50%' : anchor.align === 'right' ? '-100%' : '0';
+  el.style.transform = `translate(${xShift}, -50%)`;
+}
+
+// §16 Header / Footer — drawn relative to `paperEl` (not the content-area
+// element renderPaper() creates), since the header/footer bands live in the
+// margin OUTSIDE the content area, same reason renderCropMarks() above
+// stays content-area-relative while this doesn't.
+export function renderHeaderFooter(paperEl, layout, headerFooter) {
+  const pxPerPt = layout.paperPx.width / layout.paperPt.width;
+  if (!headerFooter) {
+    renderMarginBandText(paperEl, 'pl-header', null);
+    renderMarginBandText(paperEl, 'pl-footer', null);
+    return;
+  }
+  const bands = computeHeaderFooterBandsPt(layout.paperPt.width, layout.paperPt.height, layout.contentAreaPt);
+  renderMarginBandText(
+    paperEl, 'pl-header',
+    headerFooter.header?.enabled ? headerFooter.header.text : null,
+    computeTextAnchorInBand(bands.header, headerFooter.header?.align),
+    headerFooter.fontSizePt, pxPerPt,
+  );
+  renderMarginBandText(
+    paperEl, 'pl-footer',
+    headerFooter.footer?.enabled ? headerFooter.footer.text : null,
+    computeTextAnchorInBand(bands.footer, headerFooter.footer?.align),
+    headerFooter.fontSizePt, pxPerPt,
+  );
+}
+
+// §16 Page Number — "1 / 10" format at one of 6 margin-band anchors.
+// `pageIndex` is 0-based (same convention as everywhere else in the model).
+export function renderPageNumber(paperEl, layout, pageNumber, pageIndex, totalPages) {
+  const pxPerPt = layout.paperPx.width / layout.paperPt.width;
+  if (!pageNumber?.enabled) {
+    renderMarginBandText(paperEl, 'pl-page-number', null);
+    return;
+  }
+  const anchor = computePageNumberAnchorPt(pageNumber.position, layout.paperPt.width, layout.paperPt.height, layout.contentAreaPt);
+  renderMarginBandText(paperEl, 'pl-page-number', formatPageNumber(pageNumber.format, pageIndex + 1, totalPages), anchor, pageNumber.fontSizePt, pxPerPt);
+}
+
+// §16 Text Box — page-level annotations, content-area-relative like Slots
+// (computeSlotPx() reads the same x/y/w/h shape). Alignment via CSS flexbox
+// and rotation via CSS `rotate()` around the box's own center — the SAME
+// rotationDeg CONVENTION (Y-down, clockwise-positive) slotContentMatrix()
+// already uses for Slot content, so no sign flip is needed here (export.js's
+// computeRotatedTextMatrix achieves the same visual result on the Export
+// side via its own pdfPageFlipMatrix composition, not a flipped sign — see
+// decision_log D-019).
+export function renderTextBoxes(contentEl, textBoxes, contentAreaWidthPx, contentAreaHeightPx, pxPerPt) {
+  for (const el of contentEl.querySelectorAll(':scope > .pl-text-box')) el.remove();
+  for (const box of sortByZOrder(textBoxes ?? [])) {
+    const rectPx = computeSlotPx(box, contentAreaWidthPx, contentAreaHeightPx);
+    const el = document.createElement('div');
+    el.className = 'pl-text-box';
+    el.dataset.textBoxId = box.id;
+    el.style.position = 'absolute';
+    el.style.left = `${rectPx.x}px`;
+    el.style.top = `${rectPx.y}px`;
+    el.style.width = `${rectPx.width}px`;
+    el.style.height = `${rectPx.height}px`;
+    el.style.display = 'flex';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = box.align === 'center' ? 'center' : box.align === 'right' ? 'flex-end' : 'flex-start';
+    el.style.fontSize = `${box.fontSizePt * pxPerPt}px`;
+    el.style.fontWeight = box.bold ? 'bold' : 'normal';
+    el.style.fontFamily = 'Helvetica, Arial, sans-serif';
+    el.style.transform = `rotate(${box.rotationDeg}deg)`;
+    el.style.pointerEvents = 'none';
+    el.style.whiteSpace = 'nowrap';
+    el.style.overflow = 'hidden';
+    el.textContent = box.text;
+    contentEl.appendChild(el);
+  }
+}
+
+// §16 Watermark — text or image, centered on the page, rotated, at a fixed
+// opacity. `imageContent` (only used for `type === 'image'`) is `{ url,
+// naturalWidth, naturalHeight } | null` — a Source Engine thumbnail/preview
+// entry, same "caller resolves content, this file only applies it" split as
+// renderSlotContent()'s `content` param (§4.1 — this file has no Source
+// Engine dependency of its own).
+export function renderWatermark(contentEl, watermark, contentAreaWidthPx, contentAreaHeightPx, pxPerPt, imageContent) {
+  const existing = contentEl.querySelector(':scope > .pl-watermark');
+  if (existing) existing.remove();
+  if (!watermark?.enabled) return;
+
+  const el = document.createElement('div');
+  el.className = 'pl-watermark';
+  el.style.position = 'absolute';
+  el.style.left = `${contentAreaWidthPx / 2}px`;
+  el.style.top = `${contentAreaHeightPx / 2}px`;
+  el.style.opacity = String(watermark.opacity);
+  el.style.pointerEvents = 'none';
+
+  if (watermark.type === 'text' && watermark.text) {
+    el.textContent = watermark.text;
+    el.style.fontSize = `${watermark.fontSizePt * pxPerPt}px`;
+    el.style.fontFamily = 'Helvetica, Arial, sans-serif';
+    el.style.whiteSpace = 'nowrap';
+    el.style.transform = `translate(-50%, -50%) rotate(${watermark.rotationDeg}deg)`;
+  } else if (watermark.type === 'image' && imageContent) {
+    const size = computeWatermarkImageSizePt(contentAreaWidthPx, imageContent.naturalWidth, imageContent.naturalHeight, watermark.widthFraction);
+    const img = document.createElement('img');
+    img.src = imageContent.url;
+    img.style.width = `${size.width}px`;
+    img.style.height = `${size.height}px`;
+    img.style.display = 'block';
+    el.style.transform = `translate(-50%, -50%) rotate(${watermark.rotationDeg}deg)`;
+    el.appendChild(img);
+  } else {
+    return; // nothing resolved to draw yet (e.g. image type, source still loading)
+  }
+
+  contentEl.appendChild(el);
 }

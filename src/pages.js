@@ -3,7 +3,7 @@
 // store.js — same layering as free-layout.js (Slot[] ops) and pages.js's
 // sibling auto-fill.js; reducers.js wires these to `store.commit()`.
 
-import { createPage, createSlot } from './model.js';
+import { createPage, createSlot, createTextBox } from './model.js';
 
 export function addPage(pages, newPage, index = pages.length) {
   const clamped = Math.max(0, Math.min(index, pages.length));
@@ -27,14 +27,16 @@ export function deletePage(pages, pageId) {
 
 // Duplicates a page's paper settings AND its Slots (including whatever
 // Source content they hold, unlike Template's §17.3 sourceId-stripping —
-// a page duplicate is a working copy, not a reusable Layout Template),
-// with fresh ids throughout, inserted immediately after the original.
+// a page duplicate is a working copy, not a reusable Layout Template) AND
+// its Text Boxes (Phase 10), with fresh ids throughout, inserted
+// immediately after the original.
 export function duplicatePage(pages, pageId) {
   const index = pages.findIndex((p) => p.id === pageId);
   if (index === -1) throw new Error(`duplicatePage: no page with id ${pageId}`);
   const original = pages[index];
   const clonedSlots = original.slots.map((slot) => createSlot({ ...slot, id: undefined }));
-  const clone = createPage({ paper: original.paper, slots: clonedSlots });
+  const clonedTextBoxes = (original.textBoxes ?? []).map((box) => createTextBox({ ...box, id: undefined }));
+  const clone = createPage({ paper: original.paper, slots: clonedSlots, textBoxes: clonedTextBoxes });
   const next = [...pages];
   next.splice(index + 1, 0, clone);
   return next;
@@ -63,5 +65,6 @@ export function movePage(pages, pageId, toIndex) {
 // Template twice, or to two different Pages, never collides on an id.
 export function applyTemplateToPage(page, template) {
   const slots = template.slots.map((slot) => createSlot({ ...slot, id: undefined }));
-  return { ...page, paper: template.paper, slots };
+  const textBoxes = (template.textBoxes ?? []).map((box) => createTextBox({ ...box, id: undefined }));
+  return { ...page, paper: template.paper, slots, textBoxes };
 }

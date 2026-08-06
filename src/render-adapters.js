@@ -8,7 +8,7 @@
 // caching, no concurrency limiting, no docId bookkeeping) — that all stays
 // in sources.js, which is unit-testable.
 
-import { computeThumbnailSize, computePreviewCanvasSize, computeImagePreviewSize } from './sources.js';
+import { computeThumbnailSize, computePreviewCanvasSize, computeImagePreviewSize, computeSvgRasterSize } from './sources.js';
 
 function canvasToObjectUrl(canvas) {
   return new Promise((resolve, reject) => {
@@ -125,6 +125,80 @@ export async function renderImagePreview({ bytes, naturalWidth, naturalHeight, m
 export async function decodeImage(file) {
   const bitmap = await createImageBitmap(file);
   return { width: bitmap.width, height: bitmap.height, bitmap };
+}
+
+// --- SVG (§12/§14, Phase 10) -------------------------------------------
+// SVG has no bitmap to decode the way createImageBitmap() gives one for a
+// raster image — every tier here (thumbnail/preview/export raster) goes
+// through the SAME rasterizeSvg() helper (an <img> load + canvas draw at
+// the TARGET resolution directly, since a vector has no "native pixels" to
+// downscale FROM the way an over-large PNG would).
+
+// deps.decodeSvgText for createSourceEngine() — just the file's own text;
+// parseSvgIntrinsicSize() (sources.js) does the actual width/height parsing.
+export async function decodeSvgText(file) {
+  return file.text();
+}
+
+async function rasterizeSvg(bytes, targetWidthPx, targetHeightPx) {
+  const blob = new Blob([bytes], { type: 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    await new Promise((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('rasterizeSvg: the browser could not decode this file as an SVG image'));
+      img.src = url;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidthPx;
+    canvas.height = targetHeightPx;
+    canvas.getContext('2d').drawImage(img, 0, 0, targetWidthPx, targetHeightPx);
+    return canvas;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// deps.renderSvgThumbnail for createSourceEngine().
+export async function renderSvgThumbnail({ bytes, naturalWidth, naturalHeight, targetLongEdgePx }) {
+  const { width: targetW, height: targetH } = computeThumbnailSize(naturalWidth, naturalHeight, targetLongEdgePx);
+  const canvas = await rasterizeSvg(bytes, targetW, targetH);
+  const url = await canvasToObjectUrl(canvas);
+  const release = releaseCanvasThumbnail(canvas, url);
+  return { url, width: canvas.width, height: canvas.height, release };
+}
+
+// deps.renderSvgPreview for createSourceEngine() — Phase 5's §12.7 tier,
+// sized via computeImagePreviewSize() (a maxLongEdgePx cap), same
+// convention renderImagePreview() uses for images (not a DPI target — an
+// SVG rasterized for on-screen preview doesn't need print resolution; only
+// the EXPORT-time rasterization below does).
+export async function renderSvgPreview({ bytes, naturalWidth, naturalHeight, maxLongEdgePx }) {
+  const { width: targetW, height: targetH } = computeImagePreviewSize(naturalWidth, naturalHeight, { maxLongEdgePx });
+  const canvas = await rasterizeSvg(bytes, targetW, targetH);
+  const url = await canvasToObjectUrl(canvas);
+  const release = releaseCanvasThumbnail(canvas, url);
+  return { url, width: canvas.width, height: canvas.height, release };
+}
+
+// deps.rasterizeSvgToPng for export.js's embedSource() — pdf-lib cannot
+// embed SVG directly (§14 table), so this rasterizes at print resolution
+// (computeSvgRasterSize(), sources.js) and hands back PNG bytes for
+// outDoc.embedPng(), the same "transcode to a format pdf-lib can embed"
+// role transcodeWebpToPng() plays for WEBP images (§14.5) — just for a
+// vector format pdf-lib has no embed path for at all, rather than an
+// unsupported raster encoding.
+export async function rasterizeSvgToPng(bytes, naturalWidth, naturalHeight) {
+  const { width: targetW, height: targetH } = computeSvgRasterSize(naturalWidth, naturalHeight);
+  const canvas = await rasterizeSvg(bytes, targetW, targetH);
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((b) => {
+      if (!b) { reject(new Error('rasterizeSvgToPng: canvas.toBlob() returned null')); return; }
+      resolve(b);
+    }, 'image/png');
+  });
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 // deps.renderImageThumbnail for createSourceEngine().

@@ -1400,3 +1400,142 @@ reducer 就能做到),但沒有任何好處抵銷「使用者可以 Undo 回到�
 層級做欄位遷移,不能假設只有 `project` 物件會變。若日後真的需要「合併」
 語意的 Template 套用(而非整段取代),需要先有一個明確的配對規則來源
 (例如依 Slot 在陣列中的位置配對),不能沿用 D-014 的複製取代前例硬套。
+
+## D-019 — Phase 10 Print Aids 進階與第二階段功能:Bleed/Safe Area 模型、Watermark 置中與旋轉數學、Text Box 與 Source 系統分離、ASCII-only 文字範圍、SVG 光柵化策略、Align/Distribute 語意、Template Library 內容
+
+### Date
+2026-08-06
+
+### Topic
+架構 / 產品範圍 / 幾何數學
+
+### Context
+plan.md §16(Bleed/Safe Area/Header-Footer/Page Number/Text Box/浮水印)、
+§17.3(Template Library)、§9.6(Align & Distribute)、§18.3(鍵盤快捷鍵)、
+以及 §5.2/§14(SVG Source)在 Phase 10 一次性補齊。這些條目多半只列功能
+名稱與優先級,幾乎不含具體數值或演算法,實作過程中累積了以下八類需要
+記錄的判斷:
+
+1. §16 Bleed 只說「0/1/2/3mm/自訂」,沒說出血實際如何影響匯出幾何。
+2. §16 Safe Area 明訂「僅畫面預覽,不列印、不匯出」,但沒說 Preview 端
+   如何呈現、預設邊距多少。
+3. §16 浮水印「文字／圖片;透明度、位置、角度、大小」中的「位置」未給
+   選項清單;而浮水印的旋轉若要在 Preview(CSS,Y-down)與 Export
+   (PDF,Y-up)之間視覺一致,牽涉到 D-002/D-016 已定調的「唯一 geometry
+   模組」慣例是否也適用於這個全新的、不依附 Slot 的元素。
+4. §16「文字框 Text Box」與 §5.2 既有的 `'text'` Source kind stub 是否
+   為同一件事,需要先釐清才能決定資料模型放哪裡。
+5. 使用者已於本次對話明確決定:Text Box/浮水印文字先只支援 ASCII(不加
+   `fontkit`)——這裡記錄該決定的技術背景與後續解除條件。
+6. §14 表格只說「pdf-lib 不支援 embed SVG——需光柵化或轉路徑」,未給
+   光柵化解析度。
+7. §9.6 只列功能名稱(左/右/上/下對齊、水平/垂直置中、等寬/等高/等
+   尺寸、水平/垂直平均分布),未定義對齊基準與「平均分布」是「等間距
+   中心」還是「等間距邊緣」。
+8. §17.3 的 4 個範例 Template 名稱(`A4_上2下1`、`A4_照片4格`、`A3_6格`、
+   `證件照8格`)只給名稱,無版面細節;`證件照8格` 更不是 §9.1 任何一個
+   已命名 preset。
+
+### Alternatives Considered
+(1) Bleed 的匯出語意:
+  A. 只放大 Slot 的 CLIP 邊界(export.js `computeBleedClipRectPt`),內容
+     的 fit-scale/定位完全不變——'cover' fit 因為本來就會溢出而露出出血
+     區,'contain' fit 沒有溢出可露出(已知限制,不嘗試連動放大內容)。
+  B. 連 Slot 本身的定位/縮放矩陣都跟著放大,讓所有 fit 模式都「填滿」
+     出血區。
+
+(2) Safe Area 呈現:
+  A. Preview 專屬的虛線內縮引導線(`renderSafeAreaGuide`),完全不進入
+     export.js 任何函式——與 Bleed 共用同一個 `offsetRect()` 正負號雙用
+     原語(正值外擴、負值內縮)。
+  B. 另外設計一套獨立的內縮幾何函式。
+
+(3) Watermark 位置與旋轉:
+  A. MVP 只支援「置中」(不做位置下拉選單)——§16 舉的典型內容(草稿/
+     COPY/案件編號/日期)全部是置中對角圖章慣例,無一是角落浮水印。
+     旋轉數學比照 Slot 內容的既有模式:先在 Y-down model space 用
+     `rotateDeg()`(不手動反轉正負號)組出「置中 + 旋轉」矩陣
+     (`computeWatermarkMatrix`,可直接被 Preview 的 CSS `matrix()` 使用),
+     Export 端再組合 `pdfPageFlipMatrix()` 一次,和 Slot 內容完全同一套
+     手法(D-016 的低階 operator 路徑,而非 pdf-lib 高階 `drawText`/
+     `drawImage` 的 `rotate:` 選項——後者的旋轉樞紐點是文字/圖片自身的
+     (x,y) 錨點而非視覺中心,且 Y-flip 疊加旋轉後行列式為 -1,不再是
+     單純旋轉,高階選項無法表達,兩點在 export-real-pdf-lib.test.js 已
+     用真實 pdf-lib 驗證:90° 旋轉的 `cm` 矩陣 b 分量確實 ≈ ±1)。
+  B. 提供完整位置下拉(9 宮格),旋轉直接呼叫 pdf-lib 高階 API 的
+     `rotate:` 選項並手動試錯正負號。
+
+(4) Text Box 的資料歸屬:
+  A. Page 上獨立的 `textBoxes[]` 陣列(`model.js` `createTextBox`),不
+     經過 Source/Slot 系統——文字排版(對齊/自動置中)與圖片的
+     fit-scale 縮放語意本質不同,勉強共用 `slotContentMatrix` 的 fit
+     邏輯只會製造混淆。§5.2 的 `'text'` Source kind 維持未實作,留給
+     未來「把一頁純文字當成可拼版來源頁面」這個不同的構想。
+  B. 把 Text Box 實作成「一個內容為 `kind:'text'` Source 的特殊 Slot」,
+     完全重用 Slot 的 fit/rotation 機制。
+
+(5) 中文字型支援範圍:
+  A.(使用者本次對話明確選擇)先只支援 ASCII,不加 `fontkit`——沿用
+     Phase 8 校正頁的既有先例(D-017),避免現在就為單檔離線體積(§19)
+     背上字型子集內嵌的重量。StandardFonts 對非 WinAnsi 字元會自行
+     throw,不需要額外的輸入驗證邏輯。
+  B. 現在就加入 `fontkit` 依賴,支援中文輸入。
+
+(6) SVG 光柵化解析度:
+  A. 以來源自身 intrinsic size(解析 `<svg>` 根標籤的 width/height 或
+     viewBox,`parseSvgIntrinsicSize()`)為基準放大 4 倍
+     (`SVG_RASTER_SCALE`),長邊上限 3000px(`SVG_RASTER_MAX_LONG_EDGE_PX`)
+     ——不知道實際匯出時 Slot 有多大,4 倍是「印刷品質但不失控」的經驗
+     值,而非依 Slot 實際尺寸動態計算(那需要更動 `embedSource()` 簽章,
+     且同一個 Source 被多個不同大小的 Slot 共用時,§14.5 的「每個 Source
+     只 embed 一次」去重規則會與「依 Slot 大小客製解析度」互相衝突)。
+  B. 更動 `embedSource()`/`exportProjectToPdf()` 讓每個 Slot 各自以自己
+     的實際輸出大小光柵化 SVG(放棄跨 Slot 共用同一份 embed 結果)。
+
+(7) Align/Distribute 語意:
+  A. 對齊基準一律用「選取範圍自身的 bounding box」(min/max),不是「以
+     某一個成員為錨點」——上/下/左/右對齊時兩者數學上等價(極值本身就是
+     極值 Slot 的邊),但水平/垂直置中時採用 bounding-box 中心(業界慣例,
+     如 Figma/Illustrator),不是任一成員自己的中心。等寬/等高/等尺寸取
+     `slotIds` 陣列**第一個**目標的尺寸為準(陣列順序,非點擊順序——這層
+     不知道使用者點擊順序)。平均分布採「等間距邊緣」(distribute
+     spacing,首尾不動、中間依邊對邊間距等分),不是「等間距中心」——
+     前者對不同尺寸的混合選取不會產生重疊,是更常見的專業工具慣例。
+  B. 對齊以「使用者選取的第一個/最後一個 Slot」為錨點;平均分布採等間距
+     中心。
+
+(8) Template Library 內容:
+  A. 全部透過既有的 §9 Layout Engine 純函式(`generatePresetSlots`/
+     `generateGridSlots`)產生,不手刻座標——`證件照8格` 因為不是任何
+     已命名 preset,改直接呼叫 `generateGridSlots(rows:2, cols:4)`(與
+     §9.2 自訂 Grid 走同一條路徑),且明確記錄它是「均分 4×2 網格」而非
+     真正符合證件照標準實體尺寸(1 吋/2 吋)的排版——避免把簡化實作偽裝
+     成精確規格。
+  B. 讓 `證件照8格` 真正計算標準證件照物理尺寸(例如 3.5cm x 4.5cm)並
+     置中留白排列。
+
+### Selected Solution
+每組皆選 A。
+
+### Reason
+每個 A 選項都遵循同一條主線:能重用既有、已驗證過的機制(§4.3 唯一
+geometry 模組、§9 Layout Engine、§12.5 Source 去重快取)就重用,不新增
+平行的第二套邏輯;範圍不明確時,優先選「現在可驗證、之後容易擴充」的
+最小可行版本(Watermark 只置中、SVG 固定放大倍率、Text Box 保持獨立
+模型),而不是在缺乏規格依據的情況下自行擴大範圍去猜測完整功能。
+
+### Consequences
+Bleed 對 'contain' fit 的 Slot 沒有實際效果(出血區保持空白)是使用者
+之後可能回報的「看起來沒作用」——Properties Panel 之後可以在 UI 層提示
+「Bleed 對 contain fit 效果有限,建議搭配 cover」,不需要現在就解決。
+Watermark 若未來要支援多位置,`computeWatermarkCenterPt()` 需要擴充成
+接受一個 anchor 參數而非寫死置中,`createWatermarkSettings()` 需要新增
+`position` 欄位並走一次 schemaVersion migration。若未來要支援中文
+Text Box/浮水印,需要另外開一個 decision 記錄 fontkit 的引入與子集內嵌
+策略(§19 單檔體積的取捨)。`證件照8格` 若之後要做成真正的證件照規格,
+需要新增一個不經過 `generateGridSlots` 等分邏輯的專用排版函式。
+
+### Future Review Conditions
+使用者要求中文 Text Box/浮水印支援時、Bleed 對 contain-fit 內容的視覺
+限制被回報為 bug 時、Watermark 需要非置中位置時、`證件照8格` 需要符合
+實際證件照物理尺寸規格時。

@@ -390,3 +390,137 @@ export function snapResize(rect, edges, targetsX, targetsY, thresholdX, threshol
   }
   return { x, y, w, h };
 }
+
+// --- Align & Distribute (§9.6, Phase 10) ------------------------------------
+// Same locked-slot convention as moveSlots() above: a locked target
+// contributes to the computed reference (bounding box / reference size /
+// span) but is silently skipped when actually applying the result — §10.3
+// only forbids MOVING/RESIZING a locked Slot, not reading its geometry.
+
+function targetsOf(slots, slotIds) {
+  const idSet = new Set(slotIds);
+  return slots.filter((s) => idSet.has(s.id));
+}
+
+function applyToUnlockedTargets(slots, slotIds, fn) {
+  const idSet = new Set(slotIds);
+  return slots.map((s) => (idSet.has(s.id) && !s.locked ? fn(s) : s));
+}
+
+// Align to the SELECTION'S OWN bounding box (min/max across all targets),
+// not to one arbitrarily-designated "anchor" Slot — for left/right/top/
+// bottom this is equivalent to anchoring on the extreme Slot anyway (its own
+// edge IS the min/max), and for the two center variants it's the more
+// common convention (Figma/Illustrator align to the selection's own center,
+// not to one member's center).
+export function alignSlotsLeft(slots, slotIds) {
+  const targets = targetsOf(slots, slotIds);
+  if (targets.length < 2) return slots;
+  const minX = Math.min(...targets.map((s) => s.x));
+  return applyToUnlockedTargets(slots, slotIds, (s) => ({ ...s, x: minX }));
+}
+
+export function alignSlotsRight(slots, slotIds) {
+  const targets = targetsOf(slots, slotIds);
+  if (targets.length < 2) return slots;
+  const maxRight = Math.max(...targets.map((s) => s.x + s.w));
+  return applyToUnlockedTargets(slots, slotIds, (s) => ({ ...s, x: maxRight - s.w }));
+}
+
+export function alignSlotsTop(slots, slotIds) {
+  const targets = targetsOf(slots, slotIds);
+  if (targets.length < 2) return slots;
+  const minY = Math.min(...targets.map((s) => s.y));
+  return applyToUnlockedTargets(slots, slotIds, (s) => ({ ...s, y: minY }));
+}
+
+export function alignSlotsBottom(slots, slotIds) {
+  const targets = targetsOf(slots, slotIds);
+  if (targets.length < 2) return slots;
+  const maxBottom = Math.max(...targets.map((s) => s.y + s.h));
+  return applyToUnlockedTargets(slots, slotIds, (s) => ({ ...s, y: maxBottom - s.h }));
+}
+
+// "水平置中" (§9.6) — aligns each Slot's HORIZONTAL center (its X-center) to
+// the selection's own center, i.e. the selected Slots end up in a vertical
+// stack. Matches the common "Align Horizontal Centers" tool convention, not
+// a literal "center within the page" reading.
+export function alignSlotsCenterHorizontal(slots, slotIds) {
+  const targets = targetsOf(slots, slotIds);
+  if (targets.length < 2) return slots;
+  const minX = Math.min(...targets.map((s) => s.x));
+  const maxRight = Math.max(...targets.map((s) => s.x + s.w));
+  const centerX = (minX + maxRight) / 2;
+  return applyToUnlockedTargets(slots, slotIds, (s) => ({ ...s, x: centerX - s.w / 2 }));
+}
+
+// "垂直置中" (§9.6) — the Y-axis sibling: aligns Y-centers into a horizontal row.
+export function alignSlotsCenterVertical(slots, slotIds) {
+  const targets = targetsOf(slots, slotIds);
+  if (targets.length < 2) return slots;
+  const minY = Math.min(...targets.map((s) => s.y));
+  const maxBottom = Math.max(...targets.map((s) => s.y + s.h));
+  const centerY = (minY + maxBottom) / 2;
+  return applyToUnlockedTargets(slots, slotIds, (s) => ({ ...s, y: centerY - s.h / 2 }));
+}
+
+// 等寬／等高／等尺寸 (§9.6) — matches every target to the FIRST target's own
+// size (array order, not selection/click order, which this layer has no
+// way to know) — a simple, deterministic reference; picking "the first
+// Slot resizes the rest" avoids a separate "which one is the reference"
+// concept the spec doesn't ask for.
+export function matchSlotsWidth(slots, slotIds) {
+  const targets = targetsOf(slots, slotIds);
+  if (targets.length < 2) return slots;
+  const refW = targets[0].w;
+  return applyToUnlockedTargets(slots, slotIds, (s) => ({ ...s, w: refW }));
+}
+
+export function matchSlotsHeight(slots, slotIds) {
+  const targets = targetsOf(slots, slotIds);
+  if (targets.length < 2) return slots;
+  const refH = targets[0].h;
+  return applyToUnlockedTargets(slots, slotIds, (s) => ({ ...s, h: refH }));
+}
+
+export function matchSlotsSize(slots, slotIds) {
+  const targets = targetsOf(slots, slotIds);
+  if (targets.length < 2) return slots;
+  const { w: refW, h: refH } = targets[0];
+  return applyToUnlockedTargets(slots, slotIds, (s) => ({ ...s, w: refW, h: refH }));
+}
+
+// 水平／垂直平均分布 (§9.6) — "distribute spacing": the first and last Slot
+// (by position along the axis) stay put, and the GAP between consecutive
+// edges is made equal across every pair — not "distribute centers" (the
+// other common tool convention), chosen because it behaves sanely for
+// mixed-size selections without any two Slots overlapping, which
+// center-distribution can produce. Needs >= 3 targets (with 2, "the gap
+// between them" has nothing to redistribute against).
+function distributeSlotsAxis(slots, slotIds, axis) {
+  const sizeKey = axis === 'x' ? 'w' : 'h';
+  const targets = targetsOf(slots, slotIds).slice().sort((a, b) => a[axis] - b[axis]);
+  if (targets.length < 3) return slots;
+
+  const first = targets[0];
+  const last = targets[targets.length - 1];
+  const totalSpan = (last[axis] + last[sizeKey]) - first[axis];
+  const totalSize = targets.reduce((sum, t) => sum + t[sizeKey], 0);
+  const gap = (totalSpan - totalSize) / (targets.length - 1);
+
+  const positionById = new Map();
+  let cursor = first[axis];
+  for (const t of targets) {
+    positionById.set(t.id, cursor);
+    cursor += t[sizeKey] + gap;
+  }
+  return applyToUnlockedTargets(slots, slotIds, (s) => ({ ...s, [axis]: positionById.get(s.id) }));
+}
+
+export function distributeSlotsHorizontal(slots, slotIds) {
+  return distributeSlotsAxis(slots, slotIds, 'x');
+}
+
+export function distributeSlotsVertical(slots, slotIds) {
+  return distributeSlotsAxis(slots, slotIds, 'y');
+}

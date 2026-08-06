@@ -7,6 +7,8 @@ import {
   computePreviewCanvasSize,
   computeImagePreviewSize,
   THUMBNAIL_LONG_EDGE_PX,
+  parseSvgIntrinsicSize,
+  computeSvgRasterSize,
 } from './sources.js';
 import { createBinaryStore, isArrayBufferDetached } from './binary-store.js';
 
@@ -299,6 +301,80 @@ test('loadImageFile throws without decodeImage/renderImageThumbnail configured',
   const engine = createSourceEngine({ binaryStore: createBinaryStore() });
   const file = new File([new Uint8Array([1])], 'x.png');
   await assert.rejects(() => engine.loadImageFile(file));
+});
+
+// --- parseSvgIntrinsicSize / computeSvgRasterSize (§12/§14, Phase 10) -------
+
+test('parseSvgIntrinsicSize reads explicit width/height attributes (unitless = px)', () => {
+  assert.deepEqual(parseSvgIntrinsicSize('<svg width="200" height="100" viewBox="0 0 50 25"></svg>'), { width: 200, height: 100 });
+});
+
+test('parseSvgIntrinsicSize converts mm/cm/in/pt to CSS px at 96dpi', () => {
+  assert.deepEqual(parseSvgIntrinsicSize('<svg width="1in" height="2in"></svg>'), { width: 96, height: 192 });
+  assert.deepEqual(parseSvgIntrinsicSize('<svg width="25.4mm" height="25.4mm"></svg>'), { width: 96, height: 96 });
+});
+
+test('parseSvgIntrinsicSize falls back to viewBox when width/height are absent', () => {
+  assert.deepEqual(parseSvgIntrinsicSize('<svg viewBox="0 0 400 300"></svg>'), { width: 400, height: 300 });
+});
+
+test('parseSvgIntrinsicSize falls back to the SVG spec default (300x150) when neither is present', () => {
+  assert.deepEqual(parseSvgIntrinsicSize('<svg xmlns="http://www.w3.org/2000/svg"></svg>'), { width: 300, height: 150 });
+});
+
+test('parseSvgIntrinsicSize throws when there is no <svg> root element at all', () => {
+  assert.throws(() => parseSvgIntrinsicSize('<not-svg></not-svg>'), /no <svg> root element/);
+});
+
+test('computeSvgRasterSize scales up by SVG_RASTER_SCALE, preserving aspect ratio', () => {
+  const size = computeSvgRasterSize(100, 50, { scale: 4 });
+  assert.equal(size.width, 400);
+  assert.equal(size.height, 200);
+});
+
+test('computeSvgRasterSize caps the long edge at maxLongEdgePx', () => {
+  const size = computeSvgRasterSize(1000, 500, { scale: 4, maxLongEdgePx: 2000 });
+  assert.equal(size.width, 2000);
+  assert.equal(size.height, 1000);
+});
+
+test('computeSvgRasterSize rejects non-positive dimensions', () => {
+  assert.throws(() => computeSvgRasterSize(0, 100));
+  assert.throws(() => computeSvgRasterSize(100, -5));
+});
+
+// --- loadSvgFile ---------------------------------------------------------------
+
+test('loadSvgFile creates one Source (kind svg), parses intrinsic size, stores original bytes, and renders a thumbnail', async () => {
+  const rendered = [];
+  const decodeSvgText = async (file) => file.text();
+  const renderSvgThumbnail = async ({ bytes, naturalWidth, naturalHeight, targetLongEdgePx }) => {
+    rendered.push({ bytesLength: bytes.byteLength, naturalWidth, naturalHeight, targetLongEdgePx });
+    return { url: 'blob:svg-1', width: targetLongEdgePx, height: targetLongEdgePx, release: () => {} };
+  };
+  const binaryStore = createBinaryStore();
+  const engine = createSourceEngine({ binaryStore, decodeSvgText, renderSvgThumbnail });
+
+  const svgText = '<svg width="200" height="100" xmlns="http://www.w3.org/2000/svg"><rect width="200" height="100"/></svg>';
+  const file = new File([svgText], 'logo.svg', { type: 'image/svg+xml' });
+  const source = await engine.loadSvgFile(file);
+
+  assert.equal(source.kind, 'svg');
+  assert.equal(source.naturalWidth, 200);
+  assert.equal(source.naturalHeight, 100);
+  assert.equal(binaryStore.size(), 1);
+  assert.ok(binaryStore.has(source.docId));
+  assert.match(source.contentHash, /^[0-9a-f]{64}$/);
+
+  await engine.waitForThumbnail(source.id);
+  assert.equal(rendered.length, 1);
+  assert.equal(engine.getThumbnail(source.id).url, 'blob:svg-1');
+});
+
+test('loadSvgFile throws without decodeSvgText/renderSvgThumbnail configured', async () => {
+  const engine = createSourceEngine({ binaryStore: createBinaryStore() });
+  const file = new File(['<svg></svg>'], 'x.svg');
+  await assert.rejects(() => engine.loadSvgFile(file));
 });
 
 // --- ensurePreview / §12.7 mid-resolution Canvas Preview tier (Phase 5) ------

@@ -13,7 +13,10 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSource, createSlot, createPage, createAppState, createPaperSettings, createProject, createCropMarksSettings } from './model.js';
+import {
+  createSource, createSlot, createPage, createAppState, createPaperSettings, createProject, createCropMarksSettings,
+  createBleedSettings, createHeaderFooterSettings, createPageNumberSettings, createWatermarkSettings, createTextBox,
+} from './model.js';
 import { createBinaryStore } from './binary-store.js';
 import { exportProjectToPdf } from './export.js';
 
@@ -196,6 +199,159 @@ test('real pdf-lib: enabling Crop Marks draws exactly 8 real stroked lines per S
   // emit a stroke operator, so this count is unambiguous.
   const strokeCount = text.split(/\s+/).filter((tok) => tok === 'S').length;
   assert.equal(strokeCount, 16);
+});
+
+// --- Phase 10 Print Aids (§16) -----------------------------------------------
+// Same content-stream-decoding approach as the crop-marks/rotation tests
+// above, factored into one helper since every test below needs it.
+
+async function getPageContentText(page) {
+  const contents = page.node.normalizedEntries().Contents;
+  let text = '';
+  for (let i = 0; i < contents.size(); i += 1) {
+    const stream = contents.lookup(i);
+    const decoded = stream.getUnencodedContents ? stream.getUnencodedContents() : PDFLib.decodePDFRawStream(stream).decode();
+    text += new TextDecoder('latin1').decode(decoded);
+  }
+  return text;
+}
+
+test('real pdf-lib: Bleed expands the Slot clip rect (the `re` operator args) by sizePt on every side (§16)', { skip }, async () => {
+  const binaryStore = createBinaryStore();
+  const realPng = buildMinimalPng();
+  binaryStore.put('doc-img', realPng.buffer);
+  const source = createSource({ id: 'src-img', kind: 'image', docId: 'doc-img', naturalWidth: 1, naturalHeight: 1 });
+  const paper = createPaperSettings({ size: 'custom', customWidthPt: 200, customHeightPt: 200, marginTopPt: 0, marginBottomPt: 0, marginLeftPt: 0, marginRightPt: 0 });
+  const slot = createSlot({ x: 0.25, y: 0.25, w: 0.5, h: 0.5, sourceId: 'src-img' });
+
+  async function exportAndGetRectArgs(bleed) {
+    const state = createAppState({ project: createProject({ bleed }), sources: [source], pages: [createPage({ paper, slots: [slot] })] });
+    const outBytes = await exportProjectToPdf(state, { binaryStore, pdfLib: PDFLib });
+    const reloaded = await PDFLib.PDFDocument.load(outBytes);
+    const text = await getPageContentText(reloaded.getPage(0));
+    const match = text.match(/([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) re/);
+    return match.slice(1, 5).map(Number);
+  }
+
+  const withoutBleed = await exportAndGetRectArgs(createBleedSettings({ enabled: false }));
+  const withBleed = await exportAndGetRectArgs(createBleedSettings({ enabled: true, sizePt: 5 }));
+  // slot rect (200pt paper, x/y/w/h 0.25/0.25/0.5/0.5) = [50,50]-[150,150]
+  assert.deepEqual(withoutBleed, [50, 50, 100, 100]);
+  // bleed-expanded by 5pt on every side: x/y -5, w/h +10
+  assert.deepEqual(withBleed, [45, 45, 110, 110]);
+});
+
+test('real pdf-lib: Header/Footer draws real selectable text via the high-level drawText path (§16)', { skip }, async () => {
+  const binaryStore = createBinaryStore();
+  const state = createAppState({
+    project: createProject({ headerFooter: createHeaderFooterSettings({ header: { enabled: true, text: 'CONFIDENTIAL', align: 'left' }, footer: { enabled: true, text: 'Acme Inc', align: 'right' } }) }),
+    sources: [],
+    pages: [createPage()],
+  });
+  const outBytes = await exportProjectToPdf(state, { binaryStore, pdfLib: PDFLib });
+  const reloaded = await PDFLib.PDFDocument.load(outBytes);
+  const text = await getPageContentText(reloaded.getPage(0));
+  assert.ok(/\bTj\b/.test(text), `expected a text-showing operator, got: ${text.slice(0, 400)}`);
+  // 2 separate drawText() calls (header + footer) -> 2 BT...ET runs
+  assert.equal((text.match(/\bBT\b/g) ?? []).length, 2);
+});
+
+test('real pdf-lib: Page Number formats "{page} / {total}" per-page and draws it (§16)', { skip }, async () => {
+  const binaryStore = createBinaryStore();
+  const state = createAppState({
+    project: createProject({ pageNumber: createPageNumberSettings({ enabled: true, position: 'bottom-center' }) }),
+    sources: [],
+    pages: [createPage(), createPage(), createPage()],
+  });
+  const outBytes = await exportProjectToPdf(state, { binaryStore, pdfLib: PDFLib });
+  const reloaded = await PDFLib.PDFDocument.load(outBytes);
+
+  // Independently encode the expected strings with a throwaway embedded
+  // font, exactly the way export.js's own drawAnchoredText()/pdf-lib's
+  // drawText() do internally, so this checks the ACTUAL glyph content, not
+  // just "some text was drawn somewhere".
+  const probeDoc = await PDFLib.PDFDocument.create();
+  const probeFont = await probeDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+  for (let i = 0; i < 3; i += 1) {
+    const text = await getPageContentText(reloaded.getPage(i));
+    const expectedHex = probeFont.encodeText(`${i + 1} / 3`).toString().replace(/[()<>]/g, '');
+    assert.ok(text.toUpperCase().includes(expectedHex.toUpperCase()), `page ${i + 1}: expected hex "${expectedHex}" in content, got: ${text.slice(0, 400)}`);
+  }
+});
+
+test('real pdf-lib: a rotated Text Box draws via the low-level matrix path (non-identity `cm`, real text operators) (§16)', { skip }, async () => {
+  const binaryStore = createBinaryStore();
+  const box = createTextBox({ text: 'Draft', rotationDeg: 90, bold: true, align: 'center', x: 0.1, y: 0.1, w: 0.3, h: 0.1 });
+  const state = createAppState({ sources: [], pages: [createPage({ textBoxes: [box] })] });
+  const outBytes = await exportProjectToPdf(state, { binaryStore, pdfLib: PDFLib });
+  const reloaded = await PDFLib.PDFDocument.load(outBytes);
+  const text = await getPageContentText(reloaded.getPage(0));
+  assert.ok(/\bTj\b/.test(text), `expected a text-showing operator, got: ${text.slice(0, 400)}`);
+  // the `cm` matrix for a 90 degree rotation must NOT be the identity/axis-
+  // aligned [1 0 0 1 ...] shape — a real rotation changes the b/c components.
+  const cmMatch = text.match(/([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+) [-\d.]+ [-\d.]+ cm/);
+  assert.ok(cmMatch, 'expected a cm operator');
+  const [, a, b] = cmMatch.slice(0, 3).map(Number);
+  assert.ok(Math.abs(b) > 0.9, `expected a real rotation (b close to +/-1 for 90deg), got a=${a} b=${b}`);
+  // bold=true must select the Bold font resource, not the same registration Helvetica (regular) uses elsewhere
+  const fontDict = reloaded.getPage(0).node.Resources().lookup(PDFLib.PDFName.of('Font'));
+  const fontRefs = fontDict.entries().map(([, ref]) => reloaded.context.lookup(ref));
+  assert.ok(fontRefs.some((f) => f.dict.get(PDFLib.PDFName.of('BaseFont')).toString().includes('Bold')));
+});
+
+test('real pdf-lib: a text Watermark draws with the requested opacity via a real ExtGState (§16)', { skip }, async () => {
+  const binaryStore = createBinaryStore();
+  const state = createAppState({
+    project: createProject({ watermark: createWatermarkSettings({ enabled: true, type: 'text', text: 'COPY', opacity: 0.4, rotationDeg: -45 }) }),
+    sources: [],
+    pages: [createPage()],
+  });
+  const outBytes = await exportProjectToPdf(state, { binaryStore, pdfLib: PDFLib });
+  const reloaded = await PDFLib.PDFDocument.load(outBytes);
+  const extGState = reloaded.getPage(0).node.Resources().lookup(PDFLib.PDFName.of('ExtGState'));
+  assert.ok(extGState, 'expected an ExtGState resource for the watermark opacity');
+  const [, gsRef] = extGState.entries()[0];
+  const gsDict = reloaded.context.lookup(gsRef);
+  assert.equal(gsDict.get(PDFLib.PDFName.of('ca')).asNumber(), 0.4);
+  const text = await getPageContentText(reloaded.getPage(0));
+  assert.ok(/\bgs\b/.test(text), 'expected a gs (set graphics state) operator referencing the ExtGState');
+});
+
+test('real pdf-lib: an SVG Source is rasterized via deps.rasterizeSvgToPng and embeds as a real PNG XObject (§14/§14.5, Phase 10)', { skip }, async () => {
+  const binaryStore = createBinaryStore();
+  const svgBytes = new TextEncoder().encode('<svg width="10" height="10" xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10" fill="red"/></svg>').buffer;
+  binaryStore.put('doc-svg', svgBytes);
+  const svgSource = createSource({ id: 'src-svg', kind: 'svg', docId: 'doc-svg', naturalWidth: 10, naturalHeight: 10 });
+  const slot = createSlot({ x: 0, y: 0, w: 1, h: 1, sourceId: 'src-svg' });
+  const state = createAppState({ sources: [svgSource], pages: [createPage({ slots: [slot] })] });
+
+  const realPng = buildMinimalPng();
+  const rasterizeSvgToPng = async () => realPng; // stands in for the browser-only Canvas rasterization (render-adapters.js, verified live)
+
+  const outBytes = await exportProjectToPdf(state, { binaryStore, pdfLib: PDFLib, rasterizeSvgToPng });
+  const reloaded = await PDFLib.PDFDocument.load(outBytes);
+  const xObjects = reloaded.getPage(0).node.Resources().lookup(PDFLib.PDFName.of('XObject'));
+  assert.equal(xObjects.entries().length, 1);
+  const text = await getPageContentText(reloaded.getPage(0));
+  assert.ok(/\bDo\b/.test(text), 'expected a Do (draw XObject) operator');
+});
+
+test('real pdf-lib: an image Watermark embeds the Source image and draws it via the low-level XObject path (§16)', { skip }, async () => {
+  const binaryStore = createBinaryStore();
+  const realPng = buildMinimalPng();
+  binaryStore.put('doc-wm', realPng.buffer);
+  const wmSource = createSource({ id: 'src-wm', kind: 'image', docId: 'doc-wm', naturalWidth: 1, naturalHeight: 1 });
+  const state = createAppState({
+    project: createProject({ watermark: createWatermarkSettings({ enabled: true, type: 'image', imageSourceId: 'src-wm', opacity: 1 }) }),
+    sources: [wmSource],
+    pages: [createPage()],
+  });
+  const outBytes = await exportProjectToPdf(state, { binaryStore, pdfLib: PDFLib });
+  const reloaded = await PDFLib.PDFDocument.load(outBytes);
+  const xObjects = reloaded.getPage(0).node.Resources().lookup(PDFLib.PDFName.of('XObject'));
+  assert.equal(xObjects.entries().length, 1);
+  const text = await getPageContentText(reloaded.getPage(0));
+  assert.ok(/\bDo\b/.test(text), 'expected a Do (draw XObject) operator');
 });
 
 // Minimal valid 1x1 black RGB PNG, hand-assembled (no npm image library

@@ -24,6 +24,17 @@ import {
   snapMove,
   snapResizeAxis,
   snapResize,
+  alignSlotsLeft,
+  alignSlotsRight,
+  alignSlotsTop,
+  alignSlotsBottom,
+  alignSlotsCenterHorizontal,
+  alignSlotsCenterVertical,
+  matchSlotsWidth,
+  matchSlotsHeight,
+  matchSlotsSize,
+  distributeSlotsHorizontal,
+  distributeSlotsVertical,
 } from './free-layout.js';
 
 function slot(overrides) {
@@ -385,4 +396,105 @@ test('snapResize resizes a bottom-right handle by snapping x:end and y:end toget
   assert.equal(result.y, 0.1);
   assert.ok(Math.abs(result.w - 0.4) < 1e-9); // end snapped 0.49 -> 0.5
   assert.ok(Math.abs(result.h - 0.3) < 1e-9); // end snapped 0.39 -> 0.4
+});
+
+// --- Align & Distribute (§9.6, Phase 10) ------------------------------------
+
+test('alignSlotsLeft/Right/Top/Bottom align to the selection\'s own bounding box, skipping locked targets and untargeted slots', () => {
+  const a = slot({ id: 'a', x: 0.1, y: 0.1, w: 0.2, h: 0.1 });
+  const b = slot({ id: 'b', x: 0.5, y: 0.6, w: 0.1, h: 0.2, locked: true });
+  const c = slot({ id: 'c', x: 0.9, y: 0.9, w: 0.05, h: 0.05 }); // not targeted
+  const ids = ['a', 'b'];
+
+  const left = alignSlotsLeft([a, b, c], ids);
+  assert.equal(left.find((s) => s.id === 'a').x, 0.1); // bbox min x
+  assert.equal(left.find((s) => s.id === 'b').x, 0.5); // locked, unmoved
+  assert.equal(left.find((s) => s.id === 'c').x, 0.9); // untargeted, unmoved
+
+  const right = alignSlotsRight([a, b, c], ids);
+  // bbox max right = max(0.1+0.2, 0.5+0.1) = 0.6 -> a.x = 0.6-0.2=0.4
+  assert.ok(Math.abs(right.find((s) => s.id === 'a').x - 0.4) < 1e-9);
+  assert.equal(right.find((s) => s.id === 'b').x, 0.5); // locked, unmoved
+
+  const top = alignSlotsTop([a, b, c], ids);
+  assert.equal(top.find((s) => s.id === 'a').y, 0.1); // bbox min y
+
+  const bottom = alignSlotsBottom([a, b, c], ids);
+  // bbox max bottom = max(0.1+0.1, 0.6+0.2) = 0.8 -> a.y = 0.8-0.1=0.7
+  assert.ok(Math.abs(bottom.find((s) => s.id === 'a').y - 0.7) < 1e-9);
+});
+
+test('alignSlotsLeft/Right/Top/Bottom are a no-op for fewer than 2 targets', () => {
+  const a = slot({ id: 'a', x: 0.3 });
+  assert.deepEqual(alignSlotsLeft([a], ['a']), [a]);
+});
+
+test('alignSlotsCenterHorizontal aligns X-centers to the selection bbox center (vertical stack)', () => {
+  const a = slot({ id: 'a', x: 0, y: 0, w: 0.2, h: 0.1 }); // center x = 0.1
+  const b = slot({ id: 'b', x: 0.5, y: 0.5, w: 0.2, h: 0.1 }); // center x = 0.6
+  const result = alignSlotsCenterHorizontal([a, b], ['a', 'b']);
+  // bbox center x = (0 + 0.7)/2 = 0.35
+  assertClose(result.find((s) => s.id === 'a').x, 0.25); // centerX(0.35) - w/2(0.1)
+  assertClose(result.find((s) => s.id === 'b').x, 0.25);
+});
+
+test('alignSlotsCenterVertical aligns Y-centers to the selection bbox center (horizontal row)', () => {
+  const a = slot({ id: 'a', x: 0, y: 0, w: 0.1, h: 0.2 }); // center y = 0.1
+  const b = slot({ id: 'b', x: 0.5, y: 0.5, w: 0.1, h: 0.2 }); // center y = 0.6
+  const result = alignSlotsCenterVertical([a, b], ['a', 'b']);
+  assertClose(result.find((s) => s.id === 'a').y, 0.25);
+  assertClose(result.find((s) => s.id === 'b').y, 0.25);
+});
+
+test('matchSlotsWidth/Height/Size resize every unlocked target to the FIRST target\'s own size', () => {
+  const a = slot({ id: 'a', w: 0.3, h: 0.2 });
+  const b = slot({ id: 'b', w: 0.1, h: 0.1 });
+  const c = slot({ id: 'c', w: 0.5, h: 0.5, locked: true });
+  const ids = ['a', 'b', 'c'];
+
+  const width = matchSlotsWidth([a, b, c], ids);
+  assert.equal(width.find((s) => s.id === 'b').w, 0.3);
+  assert.equal(width.find((s) => s.id === 'c').w, 0.5); // locked, unmoved
+
+  const height = matchSlotsHeight([a, b, c], ids);
+  assert.equal(height.find((s) => s.id === 'b').h, 0.2);
+
+  const size = matchSlotsSize([a, b, c], ids);
+  assert.equal(size.find((s) => s.id === 'b').w, 0.3);
+  assert.equal(size.find((s) => s.id === 'b').h, 0.2);
+});
+
+test('distributeSlotsHorizontal keeps the first/last fixed and equalizes gaps between the rest', () => {
+  // 3 slots along x, widths 0.1 each: a at 0, b at 0.3 (should move), c at 0.9-0.1=0.8
+  const a = slot({ id: 'a', x: 0, w: 0.1 });
+  const b = slot({ id: 'b', x: 0.3, w: 0.1 });
+  const c = slot({ id: 'c', x: 0.8, w: 0.1 });
+  const result = distributeSlotsHorizontal([a, b, c], ['a', 'b', 'c']);
+  // totalSpan = (0.8+0.1) - 0 = 0.9; totalSize = 0.3; gap = (0.9-0.3)/2 = 0.3
+  assert.equal(result.find((s) => s.id === 'a').x, 0); // first fixed
+  assertClose(result.find((s) => s.id === 'b').x, 0.4); // 0 + 0.1 + 0.3
+  assertClose(result.find((s) => s.id === 'c').x, 0.8); // last fixed (by construction)
+});
+
+test('distributeSlotsVertical is the Y-axis sibling', () => {
+  const a = slot({ id: 'a', y: 0, h: 0.1 });
+  const b = slot({ id: 'b', y: 0.2, h: 0.1 });
+  const c = slot({ id: 'c', y: 0.8, h: 0.1 });
+  const result = distributeSlotsVertical([a, b, c], ['a', 'b', 'c']);
+  assert.equal(result.find((s) => s.id === 'a').y, 0);
+  assertClose(result.find((s) => s.id === 'c').y, 0.8);
+});
+
+test('distribute is a no-op for fewer than 3 targets', () => {
+  const a = slot({ id: 'a', x: 0 });
+  const b = slot({ id: 'b', x: 0.5 });
+  assert.deepEqual(distributeSlotsHorizontal([a, b], ['a', 'b']), [a, b]);
+});
+
+test('distribute skips a locked middle target (it does not move) while still spacing the rest', () => {
+  const a = slot({ id: 'a', x: 0, w: 0.1 });
+  const b = slot({ id: 'b', x: 0.3, w: 0.1, locked: true });
+  const c = slot({ id: 'c', x: 0.8, w: 0.1 });
+  const result = distributeSlotsHorizontal([a, b, c], ['a', 'b', 'c']);
+  assert.equal(result.find((s) => s.id === 'b').x, 0.3); // locked, unmoved despite being mid-distribution
 });

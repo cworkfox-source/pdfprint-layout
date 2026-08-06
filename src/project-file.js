@@ -13,7 +13,18 @@
 // excluded from History by §7.3, and has no meaning across a save/load
 // round-trip (see decision_log D-018).
 
-import { createProject, createSource, createTemplate, createCropMarksSettings, SCHEMA_VERSION } from './model.js';
+import {
+  createProject,
+  createSource,
+  createTemplate,
+  createCropMarksSettings,
+  createBleedSettings,
+  createSafeAreaSettings,
+  createHeaderFooterSettings,
+  createPageNumberSettings,
+  createWatermarkSettings,
+  SCHEMA_VERSION,
+} from './model.js';
 
 export function serializeProject(state) {
   const { schemaVersion, ...projectRest } = state.project;
@@ -51,6 +62,24 @@ export function migrateProjectData(json) {
       project: { ...data.project, cropMarks: data.project.cropMarks ?? createCropMarksSettings() },
     };
   }
+  if (data.schemaVersion === 2) {
+    // v2 -> v3 (Phase 10, D-019): Project gained bleed/safeArea/headerFooter/
+    // pageNumber/watermark; Page gained textBoxes. All default to "off"/empty
+    // so an old file's rendered output is unchanged until the user opts in.
+    data = {
+      ...data,
+      schemaVersion: 3,
+      project: {
+        ...data.project,
+        bleed: data.project.bleed ?? createBleedSettings(),
+        safeArea: data.project.safeArea ?? createSafeAreaSettings(),
+        headerFooter: data.project.headerFooter ?? createHeaderFooterSettings(),
+        pageNumber: data.project.pageNumber ?? createPageNumberSettings(),
+        watermark: data.project.watermark ?? createWatermarkSettings(),
+      },
+      pages: (data.pages ?? []).map((page) => ({ ...page, textBoxes: page.textBoxes ?? [] })),
+    };
+  }
   return data;
 }
 
@@ -62,9 +91,9 @@ export function migrateProjectData(json) {
 // catches corrupt/hand-edited files (a Template missing its required `name`
 // throws here, rather than surfacing as a confusing error much later) and
 // fills in any still-missing defaults migrateProjectData() didn't already
-// handle. Pages/Slots pass through as-is: no Slot/Page field has changed
-// shape since Phase 0, so there is nothing yet for a migration step to do
-// there.
+// handle. Pages/Slots pass through as-is: migrateProjectData()'s v2->v3 step
+// already backfilled `textBoxes` on every Page (Phase 10's only Page-shape
+// change so far), so there is nothing left for this function to do there.
 export function deserializeProject(json) {
   const migrated = migrateProjectData(json);
   const project = createProject(migrated.project);

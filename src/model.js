@@ -9,7 +9,10 @@ import { paperSizePt, mmToPt } from './geometry.js';
 // that addition shipped without a version bump at the time, which is
 // exactly the "silently changed shape under the same version number" §17.2
 // warns against. See decision_log D-018 and project-file.js's migration.
-export const SCHEMA_VERSION = 2;
+// v2 -> v3: Project gained `bleed`/`safeArea`/`headerFooter`/`pageNumber`/
+// `watermark` (Phase 10, §16) and Page gained `textBoxes` — see decision_log
+// D-019 and project-file.js's migration.
+export const SCHEMA_VERSION = 3;
 
 function makeId(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -25,7 +28,7 @@ export function createSource(overrides = {}) {
   }
   return {
     id: overrides.id ?? makeId('src'),
-    kind: overrides.kind, // 'pdf-page' | 'image' | 'blank' | 'color' | 'text'
+    kind: overrides.kind, // 'pdf-page' | 'image' | 'svg' | 'blank' | 'color' | 'text'
     fileName: overrides.fileName ?? null,
     pageIndex: overrides.pageIndex ?? null, // 0-based, kind === 'pdf-page'
     naturalWidth: overrides.naturalWidth ?? 0,
@@ -104,18 +107,47 @@ export function resolvePaperSizePt(paper) {
   return paperSizePt(paper.size, paper.orientation);
 }
 
+// §16 Text Box — a page-level annotation element (Phase 10), NOT a Source
+// placed in a Slot: text layout (wrap/align at a fixed font size) has
+// different fit semantics than an image/PDF page being scaled to fill a
+// box, so it gets its own array on Page rather than reusing
+// slotContentMatrix()'s fit-scale pipeline. §5.2 already reserves a `'text'`
+// Source `kind` for a *future*, still-unbuilt idea (a typed-text page used
+// AS one of the imposed source pages, like `blank`/`color`) — that is a
+// different feature from this one and stays unimplemented; see decision_log
+// D-019. Coordinates are normalized (0..1) relative to the content area,
+// same convention as Slot (§5.3), so one Template's text boxes also survive
+// a paper-size change unchanged.
+export function createTextBox(overrides = {}) {
+  return {
+    id: overrides.id ?? makeId('text'),
+    x: overrides.x ?? 0,
+    y: overrides.y ?? 0,
+    w: overrides.w ?? 0.3,
+    h: overrides.h ?? 0.1,
+    text: overrides.text ?? '',
+    fontSizePt: overrides.fontSizePt ?? 12,
+    bold: overrides.bold ?? false,
+    align: overrides.align ?? 'left', // 'left' | 'center' | 'right'
+    rotationDeg: overrides.rotationDeg ?? 0,
+    z: overrides.z ?? 0,
+  };
+}
+
 // §5.4 Page — one output sheet: paper settings (may just inherit Project's)
-// plus its Slots.
+// plus its Slots and (Phase 10) Text Boxes.
 export function createPage(overrides = {}) {
   return {
     id: overrides.id ?? makeId('page'),
     paper: overrides.paper ?? null, // null = inherit Project.paper
     slots: overrides.slots ?? [],
+    textBoxes: overrides.textBoxes ?? [],
   };
 }
 
-// §5.4 / §21 Template — paper + margins + gap + slots ONLY, never a Source
-// reference, so the same Template applies to any PDF/image set later.
+// §5.4 / §21 Template — paper + margins + gap + slots + text boxes ONLY,
+// never a Source reference, so the same Template applies to any PDF/image
+// set later.
 export function createTemplate(overrides = {}) {
   if (!overrides.name) {
     throw new Error('createTemplate requires a `name`');
@@ -125,6 +157,7 @@ export function createTemplate(overrides = {}) {
     name: overrides.name,
     paper: overrides.paper ?? createPaperSettings(),
     slots: (overrides.slots ?? []).map((s) => stripSourceRef(s)),
+    textBoxes: (overrides.textBoxes ?? []).map((t) => createTextBox({ ...t, id: undefined })),
   };
 }
 
@@ -150,6 +183,73 @@ export function createCropMarksSettings(overrides = {}) {
   };
 }
 
+// §16 Bleed 出血 (Phase 10) — expands every Slot's paint/clip rect outward
+// by `sizePt` on all four sides at Export/Print time; the trim line (and
+// Crop Marks, which still mark the ORIGINAL Slot rect) does not move. Off
+// by default, same "must opt in" convention as Crop Marks. `sizePt` rather
+// than a fixed enum: the UI offers 0/1/2/3mm presets plus 自訂 (custom),
+// but the model only needs one resolved point value (decision_log D-019).
+export function createBleedSettings(overrides = {}) {
+  return {
+    enabled: overrides.enabled ?? false,
+    sizePt: overrides.sizePt ?? mmToPt(3),
+  };
+}
+
+// §16 Safe Area (Phase 10) — a PREVIEW-ONLY inset guide, `marginPt` inward
+// from each Slot's trim edge (never drawn by Export or Print — §16's own
+// wording: "僅畫面預覽，不列印、不匯出"). 5mm default is a Phase 10 judgment
+// call (decision_log D-019), not spec-mandated.
+export function createSafeAreaSettings(overrides = {}) {
+  return {
+    enabled: overrides.enabled ?? false,
+    marginPt: overrides.marginPt ?? mmToPt(5),
+  };
+}
+
+// §16 Header / Footer (Phase 10) — plain text content drawn once per page,
+// centered in the top/bottom margin band. ASCII-only for now (decision_log
+// D-019 — no fontkit yet, ties to the user's Phase 10 scoping decision).
+export function createHeaderFooterSettings(overrides = {}) {
+  return {
+    header: { enabled: false, text: '', align: 'center', ...overrides.header },
+    footer: { enabled: false, text: '', align: 'center', ...overrides.footer },
+    fontSizePt: overrides.fontSizePt ?? 9,
+  };
+}
+
+// §16 Page Number (Phase 10) — supports the "1 / 10" (page / total) format
+// via `{page}`/`{total}` tokens in `format`, drawn at one of 6 page-corner/
+// edge anchors within the margin band.
+export function createPageNumberSettings(overrides = {}) {
+  return {
+    enabled: overrides.enabled ?? false,
+    format: overrides.format ?? '{page} / {total}',
+    position: overrides.position ?? 'bottom-center', // 'bottom-left'|'bottom-center'|'bottom-right'|'top-left'|'top-center'|'top-right'
+    fontSizePt: overrides.fontSizePt ?? 9,
+  };
+}
+
+// §16 浮水印 Watermark (Phase 10) — text or image, centered on the page and
+// rotated, at a fixed opacity. Position is deliberately NOT configurable in
+// this MVP (always page-center) — every example content in §16 ("草稿、
+// COPY、案件編號、日期") is a diagonal center stamp, not a corner badge; see
+// decision_log D-019. `imageSourceId` (only used when `type === 'image'`)
+// points into AppState.sources, reusing the existing Source Engine / Export
+// embed pipeline rather than a second image-storage mechanism.
+export function createWatermarkSettings(overrides = {}) {
+  return {
+    enabled: overrides.enabled ?? false,
+    type: overrides.type ?? 'text', // 'text' | 'image'
+    text: overrides.text ?? 'COPY',
+    imageSourceId: overrides.imageSourceId ?? null,
+    opacity: overrides.opacity ?? 0.3,
+    rotationDeg: overrides.rotationDeg ?? -45,
+    fontSizePt: overrides.fontSizePt ?? 72,
+    widthFraction: overrides.widthFraction ?? 0.6, // image only: fraction of content-area width
+  };
+}
+
 // §5.1 / §17.2 Project — the persisted unit (project.json). Carries
 // schemaVersion so a future format change can migrate instead of silently
 // dropping fields (§17.2).
@@ -159,6 +259,11 @@ export function createProject(overrides = {}) {
     name: overrides.name ?? '未命名專案',
     paper: overrides.paper ?? createPaperSettings(),
     cropMarks: overrides.cropMarks ?? createCropMarksSettings(),
+    bleed: overrides.bleed ?? createBleedSettings(),
+    safeArea: overrides.safeArea ?? createSafeAreaSettings(),
+    headerFooter: overrides.headerFooter ?? createHeaderFooterSettings(),
+    pageNumber: overrides.pageNumber ?? createPageNumberSettings(),
+    watermark: overrides.watermark ?? createWatermarkSettings(),
   };
 }
 

@@ -10,6 +10,12 @@ import {
   createTemplate,
   createProject,
   createCropMarksSettings,
+  createBleedSettings,
+  createSafeAreaSettings,
+  createHeaderFooterSettings,
+  createPageNumberSettings,
+  createWatermarkSettings,
+  createTextBox,
   createAppState,
 } from './model.js';
 import { paperSizePt, mmToPt } from './geometry.js';
@@ -92,10 +98,24 @@ test('resolvePaperSizePt throws for incomplete custom size', () => {
   assert.throws(() => resolvePaperSizePt(paper));
 });
 
-test('createPage defaults to inherited paper (null) and no slots', () => {
+test('createPage defaults to inherited paper (null), no slots, no text boxes', () => {
   const page = createPage();
   assert.equal(page.paper, null);
   assert.deepEqual(page.slots, []);
+  assert.deepEqual(page.textBoxes, []);
+});
+
+test('createTextBox has Phase 10 defaults and never collides on id', () => {
+  const box = createTextBox();
+  assert.equal(box.x, 0);
+  assert.equal(box.w, 0.3);
+  assert.equal(box.text, '');
+  assert.equal(box.fontSizePt, 12);
+  assert.equal(box.bold, false);
+  assert.equal(box.align, 'left');
+  assert.equal(box.rotationDeg, 0);
+  assert.match(box.id, /^text-/);
+  assert.notEqual(createTextBox().id, createTextBox().id);
 });
 
 test('createTemplate requires a name and never carries a sourceId (§21)', () => {
@@ -107,6 +127,13 @@ test('createTemplate requires a name and never carries a sourceId (§21)', () =>
   assert.equal(tmpl.slots[0].sourceId, null);
   // everything else about the slot survives the strip
   assert.equal(tmpl.slots[0].id, slotWithSource.id);
+});
+
+test('createTemplate carries text boxes with fresh ids (Phase 10)', () => {
+  const box = createTextBox({ text: 'Draft' });
+  const tmpl = createTemplate({ name: 'tmpl-with-text', textBoxes: [box] });
+  assert.equal(tmpl.textBoxes[0].text, 'Draft');
+  assert.notEqual(tmpl.textBoxes[0].id, box.id);
 });
 
 test('createProject carries the current schemaVersion (§17.2)', () => {
@@ -132,6 +159,57 @@ test('createProject wires cropMarks defaults (disabled) via createCropMarksSetti
   const project = createProject();
   assert.equal(project.cropMarks.enabled, false);
   assert.equal(project.cropMarks.lengthPt, mmToPt(5));
+});
+
+test('createBleedSettings defaults to disabled, 3mm (D-019)', () => {
+  const bleed = createBleedSettings();
+  assert.equal(bleed.enabled, false);
+  assert.equal(bleed.sizePt, mmToPt(3));
+});
+
+test('createSafeAreaSettings defaults to disabled, 5mm (D-019)', () => {
+  const safeArea = createSafeAreaSettings();
+  assert.equal(safeArea.enabled, false);
+  assert.equal(safeArea.marginPt, mmToPt(5));
+});
+
+test('createHeaderFooterSettings defaults header/footer disabled with empty text', () => {
+  const hf = createHeaderFooterSettings();
+  assert.deepEqual(hf.header, { enabled: false, text: '', align: 'center' });
+  assert.deepEqual(hf.footer, { enabled: false, text: '', align: 'center' });
+  assert.equal(hf.fontSizePt, 9);
+});
+
+test('createHeaderFooterSettings merges partial header/footer overrides', () => {
+  const hf = createHeaderFooterSettings({ header: { enabled: true, text: 'Confidential' } });
+  assert.deepEqual(hf.header, { enabled: true, text: 'Confidential', align: 'center' });
+  assert.equal(hf.footer.enabled, false);
+});
+
+test('createPageNumberSettings defaults to the "page / total" format, bottom-center', () => {
+  const pn = createPageNumberSettings();
+  assert.equal(pn.enabled, false);
+  assert.equal(pn.format, '{page} / {total}');
+  assert.equal(pn.position, 'bottom-center');
+});
+
+test('createWatermarkSettings defaults to a disabled centered diagonal text stamp (D-019)', () => {
+  const wm = createWatermarkSettings();
+  assert.equal(wm.enabled, false);
+  assert.equal(wm.type, 'text');
+  assert.equal(wm.text, 'COPY');
+  assert.equal(wm.imageSourceId, null);
+  assert.equal(wm.opacity, 0.3);
+  assert.equal(wm.rotationDeg, -45);
+});
+
+test('createProject wires Phase 10 print-aid defaults', () => {
+  const project = createProject();
+  assert.equal(project.bleed.enabled, false);
+  assert.equal(project.safeArea.enabled, false);
+  assert.equal(project.headerFooter.header.enabled, false);
+  assert.equal(project.pageNumber.enabled, false);
+  assert.equal(project.watermark.enabled, false);
 });
 
 test('createAppState wires sensible defaults for a fresh session', () => {

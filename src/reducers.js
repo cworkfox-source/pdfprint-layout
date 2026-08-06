@@ -26,6 +26,17 @@ import {
   sendSlotBackward,
   bringSlotToFront,
   sendSlotToBack,
+  alignSlotsLeft,
+  alignSlotsRight,
+  alignSlotsTop,
+  alignSlotsBottom,
+  alignSlotsCenterHorizontal,
+  alignSlotsCenterVertical,
+  matchSlotsWidth,
+  matchSlotsHeight,
+  matchSlotsSize,
+  distributeSlotsHorizontal,
+  distributeSlotsVertical,
 } from './free-layout.js';
 import {
   setSlotSource,
@@ -39,12 +50,34 @@ import {
 } from './slot-content.js';
 import { applyFillRule, generateAutoFillPageObjects } from './auto-fill.js';
 import { addPage, deletePage, duplicatePage, movePage, applyTemplateToPage } from './pages.js';
+import {
+  addTextBox,
+  moveTextBoxes,
+  setTextBoxRect,
+  setTextBoxContent,
+  deleteTextBoxes,
+  duplicateTextBoxes,
+  bringTextBoxForward,
+  sendTextBoxBackward,
+  bringTextBoxToFront,
+  sendTextBoxToBack,
+} from './text-elements.js';
 
 function updatePageSlots(state, pageId, updateFn) {
   const pageIndex = state.pages.findIndex((p) => p.id === pageId);
   if (pageIndex === -1) throw new Error(`No page with id ${pageId}`);
   const pages = state.pages.slice();
   pages[pageIndex] = { ...pages[pageIndex], slots: updateFn(pages[pageIndex].slots) };
+  return { ...state, pages };
+}
+
+// Phase 10 sibling of updatePageSlots() above, targeting one page's
+// `textBoxes` array instead — same "find page, replace one field" shape.
+function updatePageTextBoxes(state, pageId, updateFn) {
+  const pageIndex = state.pages.findIndex((p) => p.id === pageId);
+  if (pageIndex === -1) throw new Error(`No page with id ${pageId}`);
+  const pages = state.pages.slice();
+  pages[pageIndex] = { ...pages[pageIndex], textBoxes: updateFn(pages[pageIndex].textBoxes) };
   return { ...state, pages };
 }
 
@@ -111,6 +144,42 @@ export function sendSlotToBackAction(pageId, slotId) {
 // `{ historyEntry: false }` to store.commit() alongside this action.
 export function setSelectionAction(selection) {
   return (state) => ({ ...state, selection });
+}
+
+// --- Align & Distribute (§9.6, Phase 10) ------------------------------------
+
+export function alignSlotsLeftAction(pageId, slotIds) {
+  return (state) => updatePageSlots(state, pageId, (slots) => alignSlotsLeft(slots, slotIds));
+}
+export function alignSlotsRightAction(pageId, slotIds) {
+  return (state) => updatePageSlots(state, pageId, (slots) => alignSlotsRight(slots, slotIds));
+}
+export function alignSlotsTopAction(pageId, slotIds) {
+  return (state) => updatePageSlots(state, pageId, (slots) => alignSlotsTop(slots, slotIds));
+}
+export function alignSlotsBottomAction(pageId, slotIds) {
+  return (state) => updatePageSlots(state, pageId, (slots) => alignSlotsBottom(slots, slotIds));
+}
+export function alignSlotsCenterHorizontalAction(pageId, slotIds) {
+  return (state) => updatePageSlots(state, pageId, (slots) => alignSlotsCenterHorizontal(slots, slotIds));
+}
+export function alignSlotsCenterVerticalAction(pageId, slotIds) {
+  return (state) => updatePageSlots(state, pageId, (slots) => alignSlotsCenterVertical(slots, slotIds));
+}
+export function matchSlotsWidthAction(pageId, slotIds) {
+  return (state) => updatePageSlots(state, pageId, (slots) => matchSlotsWidth(slots, slotIds));
+}
+export function matchSlotsHeightAction(pageId, slotIds) {
+  return (state) => updatePageSlots(state, pageId, (slots) => matchSlotsHeight(slots, slotIds));
+}
+export function matchSlotsSizeAction(pageId, slotIds) {
+  return (state) => updatePageSlots(state, pageId, (slots) => matchSlotsSize(slots, slotIds));
+}
+export function distributeSlotsHorizontalAction(pageId, slotIds) {
+  return (state) => updatePageSlots(state, pageId, (slots) => distributeSlotsHorizontal(slots, slotIds));
+}
+export function distributeSlotsVerticalAction(pageId, slotIds) {
+  return (state) => updatePageSlots(state, pageId, (slots) => distributeSlotsVertical(slots, slotIds));
 }
 
 // --- Source Placement (§10.1/§10.2, Phase 5) -----------------------------
@@ -238,4 +307,86 @@ export function applyTemplateAction(pageId, template) {
     pages[pageIndex] = applyTemplateToPage(pages[pageIndex], template);
     return { ...state, pages };
   };
+}
+
+// --- Print Aids (§16, Phase 10) ---------------------------------------------
+// Same project-level merge convention as setCropMarksAction above.
+
+export function setBleedAction(overrides) {
+  return (state) => ({ ...state, project: { ...state.project, bleed: { ...state.project.bleed, ...overrides } } });
+}
+
+export function setSafeAreaAction(overrides) {
+  return (state) => ({ ...state, project: { ...state.project, safeArea: { ...state.project.safeArea, ...overrides } } });
+}
+
+// header/footer are nested one level deeper — merging `overrides.header`/
+// `overrides.footer` (if present) into the existing sub-object, same as
+// createHeaderFooterSettings()'s own merge shape, rather than requiring the
+// whole header or footer object on every call.
+export function setHeaderFooterAction(overrides) {
+  return (state) => ({
+    ...state,
+    project: {
+      ...state.project,
+      headerFooter: {
+        ...state.project.headerFooter,
+        ...overrides,
+        header: { ...state.project.headerFooter.header, ...overrides.header },
+        footer: { ...state.project.headerFooter.footer, ...overrides.footer },
+      },
+    },
+  });
+}
+
+export function setPageNumberAction(overrides) {
+  return (state) => ({ ...state, project: { ...state.project, pageNumber: { ...state.project.pageNumber, ...overrides } } });
+}
+
+export function setWatermarkAction(overrides) {
+  return (state) => ({ ...state, project: { ...state.project, watermark: { ...state.project.watermark, ...overrides } } });
+}
+
+// --- Text Boxes (§16, Phase 10) ---------------------------------------------
+// Same wiring pattern as the Free Layout Slot actions above: each creator
+// targets one page's `textBoxes` array via a text-elements.js primitive.
+
+export function addTextBoxAction(pageId, newBox) {
+  return (state) => updatePageTextBoxes(state, pageId, (boxes) => addTextBox(boxes, newBox));
+}
+
+export function moveTextBoxesAction(pageId, boxIds, dx, dy) {
+  return (state) => updatePageTextBoxes(state, pageId, (boxes) => moveTextBoxes(boxes, boxIds, dx, dy));
+}
+
+export function resizeTextBoxAction(pageId, boxId, rect) {
+  return (state) => updatePageTextBoxes(state, pageId, (boxes) => setTextBoxRect(boxes, boxId, rect));
+}
+
+export function setTextBoxContentAction(pageId, boxId, overrides) {
+  return (state) => updatePageTextBoxes(state, pageId, (boxes) => setTextBoxContent(boxes, boxId, overrides));
+}
+
+export function deleteTextBoxesAction(pageId, boxIds) {
+  return (state) => updatePageTextBoxes(state, pageId, (boxes) => deleteTextBoxes(boxes, boxIds));
+}
+
+export function duplicateTextBoxesAction(pageId, boxIds, offsetOpts) {
+  return (state) => updatePageTextBoxes(state, pageId, (boxes) => duplicateTextBoxes(boxes, boxIds, offsetOpts));
+}
+
+export function bringTextBoxForwardAction(pageId, boxId) {
+  return (state) => updatePageTextBoxes(state, pageId, (boxes) => bringTextBoxForward(boxes, boxId));
+}
+
+export function sendTextBoxBackwardAction(pageId, boxId) {
+  return (state) => updatePageTextBoxes(state, pageId, (boxes) => sendTextBoxBackward(boxes, boxId));
+}
+
+export function bringTextBoxToFrontAction(pageId, boxId) {
+  return (state) => updatePageTextBoxes(state, pageId, (boxes) => bringTextBoxToFront(boxes, boxId));
+}
+
+export function sendTextBoxToBackAction(pageId, boxId) {
+  return (state) => updatePageTextBoxes(state, pageId, (boxes) => sendTextBoxToBack(boxes, boxId));
 }

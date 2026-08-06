@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>Phase 10 dev harness — Print Aids</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 1rem; color: #222; }
+  h1 { font-size: 1.1rem; }
+  .layout { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
+  .controls { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
+  .controls label { display: flex; flex-direction: column; font-size: 12px; gap: 2px; }
+  fieldset { border: 1px solid #ccc; margin: 0 0 0.75rem 0; }
+  legend { font-size: 12px; font-weight: bold; }
+  #gallery { display: flex; flex-direction: column; gap: 8px; border: 1px solid #ccc; padding: 8px; min-height: 100px; background: #fafafa; width: 140px; }
+  .tile { border: 1px solid #ddd; background: #fff; padding: 4px; font-size: 10px; word-break: break-all; }
+  .tile img { width: 100%; height: 50px; object-fit: contain; background: #eee; display: block; }
+  #page { border: 1px solid #ccc; padding: 8px; background: #eee; }
+  .pl-slot { font-size: 8px; color: #900; overflow: hidden; }
+  #verify { display: flex; flex-direction: column; gap: 12px; flex: 1; min-width: 260px; }
+  .verify-page { border: 1px solid #0a7d28; background: #fff; padding: 6px; }
+  .verify-page canvas { display: block; max-width: 100%; }
+  #log { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; margin-top: 1rem; border-top: 1px solid #ccc; padding-top: 0.5rem; max-height: 200px; overflow: auto; }
+  #readout { font-family: ui-monospace, monospace; font-size: 11px; white-space: pre; margin-top: 0.5rem; max-height: 160px; overflow: auto; }
+  .pass { color: #0a7d28; }
+  .fail { color: #b00020; }
+</style>
+</head>
+<body>
+<h1>Phase 10 dev harness — 不是產品 UI，僅供人工／自動化檢查 Print Aids（見 docs/plan.md Phase 10 / §16）</h1>
+
+<div class="controls">
+  <label>PDF / Image 檔案
+    <input id="file-input" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,image/*,application/pdf">
+  </label>
+  <button id="assign-sources">依序指派來源到 2 個 Slot</button>
+</div>
+
+<fieldset class="controls">
+  <legend>Bleed 出血（§16）</legend>
+  <label><input id="bleed-enabled" type="checkbox"> 啟用</label>
+  <label>出血 mm <input id="bleed-size" type="number" value="3" step="0.5" style="width:4em"></label>
+</fieldset>
+
+<fieldset class="controls">
+  <legend>Safe Area（§16，僅預覽）</legend>
+  <label><input id="safearea-enabled" type="checkbox"> 啟用</label>
+  <label>邊距 mm <input id="safearea-margin" type="number" value="5" step="0.5" style="width:4em"></label>
+</fieldset>
+
+<fieldset class="controls">
+  <legend>Header / Footer（§16）</legend>
+  <label><input id="header-enabled" type="checkbox"> Header <input id="header-text" value="CONFIDENTIAL" style="width:10em"></label>
+  <label>對齊 <select id="header-align"><option>left</option><option selected>center</option><option>right</option></select></label>
+  <label><input id="footer-enabled" type="checkbox"> Footer <input id="footer-text" value="Acme Inc." style="width:10em"></label>
+  <label>對齊 <select id="footer-align"><option>left</option><option selected>center</option><option>right</option></select></label>
+</fieldset>
+
+<fieldset class="controls">
+  <legend>Page Number（§16）</legend>
+  <label><input id="pagenum-enabled" type="checkbox"> 啟用</label>
+  <label>格式 <input id="pagenum-format" value="{page} / {total}" style="width:8em"></label>
+  <label>位置
+    <select id="pagenum-position">
+      <option>top-left</option><option>top-center</option><option>top-right</option>
+      <option>bottom-left</option><option selected>bottom-center</option><option>bottom-right</option>
+    </select>
+  </label>
+</fieldset>
+
+<fieldset class="controls">
+  <legend>Text Box（§16）</legend>
+  <button id="add-text-box">新增文字框</button>
+  <label>旋轉角度 <input id="text-box-rotation" type="number" value="0" style="width:4em"></label>
+  <button id="rotate-last-text-box">套用到最後一個文字框</button>
+</fieldset>
+
+<fieldset class="controls">
+  <legend>浮水印 Watermark（§16）</legend>
+  <label><input id="wm-enabled" type="checkbox"> 啟用</label>
+  <label>類型 <select id="wm-type"><option value="text" selected>text</option><option value="image">image</option></select></label>
+  <label>文字 <input id="wm-text" value="COPY" style="width:8em"></label>
+  <label>透明度 <input id="wm-opacity" type="number" value="0.3" step="0.1" min="0" max="1" style="width:4em"></label>
+  <label>角度 <input id="wm-rotation" type="number" value="-45" style="width:4em"></label>
+  <button id="apply-watermark">套用浮水印設定</button>
+</fieldset>
+
+<div class="controls">
+  <button id="export-pdf">Export PDF</button>
+  <a id="download-link" style="display:none" download="export.pdf">下載匯出的 PDF</a>
+</div>
+
+<div class="layout">
+  <div id="gallery"></div>
+  <div id="page"></div>
+  <div id="verify">
+    <div>Export 驗證（重新載入輸出的 PDF，以真實 pdf.js re-render 確認視覺正確）：</div>
+  </div>
+</div>
+
+<div id="readout"></div>
+<div id="log"></div>
+
+<script type="module">
+  import * as pdfjsLib from '/vendor/pdfjs/pdf.mjs';
+  import * as PDFLib from '/vendor/pdf-lib/pdf-lib.esm.js';
+  import { createStore } from '/src/store.js';
+  import { createAppState, createPage, createTextBox } from '/src/model.js';
+  import { mmToPt } from '/src/geometry.js';
+  import {
+    computePaperPreviewLayout, resolveZoom, renderPaper, renderSlots, renderSlotContent,
+    renderBleedGuide, renderSafeAreaGuide, renderHeaderFooter, renderPageNumber, renderTextBoxes, renderWatermark,
+    computeSlotPx, PX_PER_PT_AT_ZOOM_1,
+  } from '/src/preview.js';
+  import { generatePresetSlots, createSlotsFromRects } from '/src/layout.js';
+  import {
+    addSourceAction, setSlotSourceAction,
+    setBleedAction, setSafeAreaAction, setHeaderFooterAction, setPageNumberAction, setWatermarkAction,
+    addTextBoxAction, setTextBoxContentAction,
+  } from '/src/reducers.js';
+  import { createSourceEngine } from '/src/sources.js';
+  import { renderPdfPageThumbnail, decodeImage, renderImageThumbnail, renderPdfPagePreview, renderImagePreview } from '/src/render-adapters.js';
+  import { transcodeWebpToPng } from '/src/export-adapters.js';
+  import { createBinaryStore } from '/src/binary-store.js';
+  import { exportProjectToPdf } from '/src/export.js';
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.mjs';
+
+  const $ = (id) => document.getElementById(id);
+  const gallery = $('gallery');
+  const pageEl = $('page');
+  const verifyEl = $('verify');
+  const logEl = $('log');
+  const PAGE_ID = 'page-1';
+
+  const log = (msg, ok) => {
+    const line = document.createElement('div');
+    line.className = ok === undefined ? '' : (ok ? 'pass' : 'fail');
+    line.textContent = `${ok === undefined ? '·' : (ok ? '[PASS]' : '[FAIL]')} ${msg}`;
+    logEl.appendChild(line);
+    console.log(msg);
+  };
+
+  const binaryStore = createBinaryStore();
+  const sources = new Map();
+  const engine = createSourceEngine({
+    binaryStore,
+    renderPdfPageThumbnail,
+    decodeImage,
+    renderImageThumbnail,
+    renderPdfPagePreview,
+    renderImagePreview,
+    onThumbnailReady: (sourceId) => {
+      const img = document.querySelector(`.tile[data-source-id="${sourceId}"] img`);
+      const thumb = engine.getThumbnail(sourceId);
+      if (img && thumb) img.src = thumb.url;
+      render();
+    },
+    onThumbnailError: (sourceId, err) => log(`縮圖失敗 ${sourceId}: ${err.message}`, false),
+  });
+
+  const paper = { size: 'A4', orientation: 'portrait', marginTopPt: 40, marginBottomPt: 40, marginLeftPt: 28, marginRightPt: 28, gapHorizontalPt: 8, gapVerticalPt: 8 };
+  function presetSlots() {
+    const layout = computePaperPreviewLayout(paper, 1);
+    const rects = generatePresetSlots('2up-h', {
+      contentAreaWidthPt: layout.contentAreaPt.width, contentAreaHeightPt: layout.contentAreaPt.height,
+      gapHorizontalPt: paper.gapHorizontalPt, gapVerticalPt: paper.gapVerticalPt,
+    });
+    return createSlotsFromRects(rects);
+  }
+  const store = createStore(createAppState({ pages: [createPage({ id: PAGE_ID, paper, slots: presetSlots() })] }));
+
+  const requestedPreviews = new Set();
+  function resolveContent(sourceId) {
+    if (!sourceId) return null;
+    return engine.getPreview(sourceId) ?? engine.getThumbnail(sourceId) ?? null;
+  }
+  function ensurePreviewsForVisibleSources() {
+    for (const page of store.getState().pages) {
+      for (const slot of page.slots) {
+        if (slot.sourceId && !requestedPreviews.has(slot.sourceId)) {
+          requestedPreviews.add(slot.sourceId);
+          const source = sources.get(slot.sourceId);
+          if (source) engine.ensurePreview(source).then(() => render()).catch((err) => log(`Preview 失敗: ${err.message}`, false));
+        }
+      }
+    }
+  }
+
+  function render() {
+    ensurePreviewsForVisibleSources();
+    const state = store.getState();
+    const page = state.pages[0];
+    const layout = computePaperPreviewLayout(page.paper, resolveZoom('fit-width', {
+      containerWidthPx: 420, containerHeightPx: 99999,
+      paperWidthPt: computePaperPreviewLayout(page.paper, 1).paperPt.width,
+      paperHeightPt: computePaperPreviewLayout(page.paper, 1).paperPt.height,
+    }));
+    const paperEl = renderPaper(pageEl, layout);
+    const contentEl = paperEl.querySelector(':scope > .pl-content-area');
+    const pxPerPt = PX_PER_PT_AT_ZOOM_1 * layout.zoom;
+
+    renderSlots(contentEl, page.slots, layout.contentAreaPx.width, layout.contentAreaPx.height);
+    for (const el of contentEl.querySelectorAll(':scope > .pl-slot')) {
+      const slot = page.slots.find((s) => s.id === el.dataset.slotId);
+      const px = computeSlotPx(slot, layout.contentAreaPx.width, layout.contentAreaPx.height);
+      renderSlotContent(el, slot, resolveContent(slot.sourceId), px.width, px.height);
+    }
+
+    renderBleedGuide(contentEl, page.slots, layout.contentAreaPx.width, layout.contentAreaPx.height, state.project.bleed, pxPerPt);
+    renderSafeAreaGuide(contentEl, page.slots, layout.contentAreaPx.width, layout.contentAreaPx.height, state.project.safeArea, pxPerPt);
+    renderHeaderFooter(paperEl, layout, state.project.headerFooter);
+    renderPageNumber(paperEl, layout, state.project.pageNumber, 0, 1);
+    renderTextBoxes(contentEl, page.textBoxes, layout.contentAreaPx.width, layout.contentAreaPx.height, pxPerPt);
+
+    let watermarkImageContent = null;
+    if (state.project.watermark?.type === 'image' && state.project.watermark.imageSourceId) {
+      watermarkImageContent = resolveContent(state.project.watermark.imageSourceId);
+      if (watermarkImageContent) {
+        const src = sources.get(state.project.watermark.imageSourceId);
+        watermarkImageContent = { ...watermarkImageContent, naturalWidth: src.naturalWidth, naturalHeight: src.naturalHeight };
+      }
+    }
+    renderWatermark(contentEl, state.project.watermark, layout.contentAreaPx.width, layout.contentAreaPx.height, pxPerPt, watermarkImageContent);
+
+    $('readout').textContent = JSON.stringify({
+      bleed: state.project.bleed, safeArea: state.project.safeArea, headerFooter: state.project.headerFooter,
+      pageNumber: state.project.pageNumber, watermark: state.project.watermark,
+      textBoxes: page.textBoxes,
+    }, null, 2);
+    window.__state = state;
+    window.__store = store;
+  }
+
+  function renderTile(source) {
+    const tile = document.createElement('div');
+    tile.className = 'tile';
+    tile.dataset.sourceId = source.id;
+    tile.innerHTML = `<img><div>${source.kind}${source.kind === 'pdf-page' ? ` p${source.pageIndex + 1}` : ''}</div><div>${source.fileName ?? ''}</div>`;
+    gallery.appendChild(tile);
+  }
+
+  async function handleFiles(fileList) {
+    for (const file of fileList) {
+      try {
+        if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+          const newSources = await engine.loadPdfFile(file, { pdfjsLib, pageRange: 'all' });
+          for (const s of newSources) { sources.set(s.id, s); store.commit(addSourceAction(s), null); renderTile(s); }
+          log(`載入 PDF ${file.name}: ${newSources.length} 頁`, true);
+        } else {
+          const s = await engine.loadImageFile(file);
+          sources.set(s.id, s); store.commit(addSourceAction(s), null); renderTile(s);
+          log(`載入圖片 ${file.name}`, true);
+        }
+      } catch (err) {
+        log(`載入失敗 ${file.name}: ${err.message}`, false);
+        console.error(err);
+      }
+    }
+    render();
+  }
+  $('file-input').addEventListener('change', (e) => { if (e.target.files.length) handleFiles(e.target.files); });
+
+  $('assign-sources').addEventListener('click', () => {
+    const ids = [...sources.keys()];
+    const page = store.getState().pages[0];
+    page.slots.forEach((slot, i) => {
+      if (ids[i]) store.commit(setSlotSourceAction(PAGE_ID, slot.id, ids[i]), null);
+    });
+    render();
+  });
+
+  $('bleed-enabled').addEventListener('change', applyBleed);
+  $('bleed-size').addEventListener('change', applyBleed);
+  function applyBleed() {
+    store.commit(setBleedAction({ enabled: $('bleed-enabled').checked, sizePt: mmToPt(Number($('bleed-size').value)) }), null);
+    render();
+  }
+
+  $('safearea-enabled').addEventListener('change', applySafeArea);
+  $('safearea-margin').addEventListener('change', applySafeArea);
+  function applySafeArea() {
+    store.commit(setSafeAreaAction({ enabled: $('safearea-enabled').checked, marginPt: mmToPt(Number($('safearea-margin').value)) }), null);
+    render();
+  }
+
+  for (const id of ['header-enabled', 'header-text', 'header-align', 'footer-enabled', 'footer-text', 'footer-align']) {
+    $(id).addEventListener('change', applyHeaderFooter);
+  }
+  function applyHeaderFooter() {
+    store.commit(setHeaderFooterAction({
+      header: { enabled: $('header-enabled').checked, text: $('header-text').value, align: $('header-align').value },
+      footer: { enabled: $('footer-enabled').checked, text: $('footer-text').value, align: $('footer-align').value },
+    }), null);
+    render();
+  }
+
+  for (const id of ['pagenum-enabled', 'pagenum-format', 'pagenum-position']) {
+    $(id).addEventListener('change', applyPageNumber);
+  }
+  function applyPageNumber() {
+    store.commit(setPageNumberAction({ enabled: $('pagenum-enabled').checked, format: $('pagenum-format').value, position: $('pagenum-position').value }), null);
+    render();
+  }
+
+  let lastTextBoxId = null;
+  $('add-text-box').addEventListener('click', () => {
+    const box = createTextBox({ x: 0.1, y: 0.85, w: 0.4, h: 0.08, text: 'Sample Text', fontSizePt: 14, align: 'left' });
+    lastTextBoxId = box.id;
+    store.commit(addTextBoxAction(PAGE_ID, box), null);
+    render();
+  });
+  $('rotate-last-text-box').addEventListener('click', () => {
+    if (!lastTextBoxId) { log('請先新增文字框', false); return; }
+    store.commit(setTextBoxContentAction(PAGE_ID, lastTextBoxId, { rotationDeg: Number($('text-box-rotation').value) }), null);
+    render();
+  });
+
+  $('apply-watermark').addEventListener('click', () => {
+    store.commit(setWatermarkAction({
+      enabled: $('wm-enabled').checked, type: $('wm-type').value, text: $('wm-text').value,
+      opacity: Number($('wm-opacity').value), rotationDeg: Number($('wm-rotation').value),
+    }), null);
+    render();
+  });
+
+  async function renderVerificationPage(pageIndex, pdfDoc, label) {
+    const page = await pdfDoc.getPage(pageIndex + 1);
+    const viewport = page.getViewport({ scale: 1 });
+    const wrap = document.createElement('div');
+    wrap.className = 'verify-page';
+    const labelEl = document.createElement('div');
+    labelEl.textContent = `${label} — Page ${pageIndex + 1} (${viewport.width.toFixed(1)} x ${viewport.height.toFixed(1)} pt)`;
+    wrap.appendChild(labelEl);
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    wrap.appendChild(canvas);
+    verifyEl.appendChild(wrap);
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  }
+
+  $('export-pdf').addEventListener('click', async () => {
+    try {
+      const state = store.getState();
+      const bytes = await exportProjectToPdf(state, { binaryStore, pdfLib: PDFLib, transcodeWebpToPng });
+      window.__lastExportBytes = bytes;
+      log(`Export 完成: ${bytes.length} bytes`, true);
+
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const link = $('download-link');
+      link.href = url;
+      link.style.display = '';
+      link.textContent = `下載匯出的 PDF (${bytes.length} bytes)`;
+
+      for (const el of [...verifyEl.querySelectorAll('.verify-page')]) el.remove();
+      const loadingTask = pdfjsLib.getDocument({ data: bytes.slice() });
+      const pdfDoc = await loadingTask.promise;
+      for (let i = 0; i < pdfDoc.numPages; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await renderVerificationPage(i, pdfDoc, 'Export');
+      }
+      log(`Export: pdf.js 重新渲染確認 ${pdfDoc.numPages} 頁`, true);
+      window.__reloadedPageCount = pdfDoc.numPages;
+    } catch (err) {
+      log(`Export 失敗: ${err.message}`, false);
+      console.error(err);
+    }
+  });
+
+  log('就緒，請選擇 PDF 或圖片檔案');
+  render();
+
+  window.__engine = engine;
+  window.__sources = sources;
+  window.__handleFiles = handleFiles;
+  window.__waitForAllThumbnails = () => engine.waitForAllThumbnails();
+  window.__assignSources = () => $('assign-sources').click();
+  window.__exportPdf = () => $('export-pdf').click();
+</script>
+</body>
+</html>

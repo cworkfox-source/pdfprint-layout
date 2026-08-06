@@ -36,11 +36,23 @@ import {
   modelYToPdfY,
   pdfPageFlipMatrix,
   multiply,
+  translate,
   scaleXY,
   effectiveBoundingBox,
   sortByZOrder,
 } from './geometry.js';
 import { computeCropMarksForSlot, cropMarkSegmentsToPdfSpace } from './print.js';
+import {
+  computeBleedExpandedRect,
+  computeHeaderFooterBandsPt,
+  computeTextAnchorInBand,
+  formatPageNumber,
+  computePageNumberAnchorPt,
+  computeWatermarkCenterPt,
+  computeWatermarkImageSizePt,
+  computeWatermarkMatrix,
+  computeAlignedTextOrigin,
+} from './print-aids.js';
 
 // §14.6 — output MediaBox is the paper size in pt, rounded to 3 decimals
 // only at this PDF-writing boundary (geometry.js's own convention, §6.1).
@@ -82,9 +94,11 @@ export function computeContentRotationAndSize(source, slot) {
       contentH: box.h,
     };
   }
-  if (source.kind === 'image') {
-    // No inherent source rotation for a raster image (§14.3 is PDF-page-
-    // specific) — naturalWidth/Height are pixel dims either way (D-012).
+  if (source.kind === 'image' || source.kind === 'svg') {
+    // No inherent source rotation for a raster image OR a rasterized SVG
+    // (§14.3 is PDF-page-specific) — naturalWidth/Height are pixel dims
+    // either way (D-012; SVG's own naturalWidth/Height are its parsed
+    // intrinsic size, same units convention, Phase 10 D-019).
     return { rotation: slot.rotation, contentW: source.naturalWidth, contentH: source.naturalHeight };
   }
   throw new Error(`computeContentRotationAndSize: unsupported source kind "${source.kind}" for Export`);
@@ -171,7 +185,9 @@ export function computeExportContentMatrix(slot, source, slotAbsRectPt, paperHei
 export function computeXObjectDrawMatrix(slot, source, slotAbsRectPt, paperHeightPt) {
   const conceptualMatrix = computeExportContentMatrix(slot, source, slotAbsRectPt, paperHeightPt);
   const { contentW, contentH } = computeContentRotationAndSize(source, slot);
-  if (source.kind === 'image') {
+  if (source.kind === 'image' || source.kind === 'svg') {
+    // A rasterized SVG embeds via embedPng() exactly like an image (see
+    // embedSource() below) — same unit-square + handedness correction.
     return multiply(conceptualMatrix, multiply(pdfPageFlipMatrix(contentH), scaleXY(contentW, contentH)));
   }
   if (source.kind === 'pdf-page') {
@@ -191,6 +207,51 @@ export function computeExportClipRectPt(slotAbsRectPt, paperHeightPt) {
     w: slotAbsRectPt.w,
     h: slotAbsRectPt.h,
   };
+}
+
+// --- Phase 10 Print Aids (§16) ---------------------------------------------
+
+// §16 Bleed — same idea as computeExportClipRectPt() above, just fed an
+// already Bleed-expanded rect when Bleed is enabled (computeBleedExpandedRect,
+// print-aids.js) instead of the Slot's own unexpanded rect. Content
+// position/fit-scale (computeXObjectDrawMatrix) is NOT affected — only the
+// clip boundary moves (decision_log D-019).
+export function computeBleedClipRectPt(slotAbsRectPt, bleed, paperHeightPt) {
+  const rect = bleed?.enabled ? computeBleedExpandedRect(slotAbsRectPt, bleed.sizePt) : slotAbsRectPt;
+  return computeExportClipRectPt(rect, paperHeightPt);
+}
+
+// The full model-space -> PDF-space matrix for a rotated TEXT run whose own
+// local origin is `(alignedX, alignedY)` — a baseline-left origin already
+// offset for alignment/vertical centering, computeAlignedTextOrigin()
+// (print-aids.js) — inside a `boxW x boxH` box centered at `centerPt` and
+// rotated by `rotationDeg`. Used for both Text Box and Watermark text.
+//
+// Same composition order as computeExportContentMatrix() for Slots: build
+// entirely in Y-down MODEL space (computeWatermarkMatrix, rotateDeg applied
+// with no manual sign flip — same convention Preview's CSS rotation uses),
+// THEN compose pdfPageFlipMatrix() in front exactly once. This is
+// deliberately NOT built from pdf-lib's own high-level `rotate:` option:
+// that option pivots text around its own (x,y) draw origin (not a visual
+// center) AND cannot express a mirrored-handedness transform (a Y-flip
+// composed with a rotation has determinant -1 — not a pure rotation, which
+// is all `rotate:` can represent). See decision_log D-019.
+export function computeRotatedTextMatrix(centerPt, rotationDeg, boxW, boxH, alignedX, alignedY, paperHeightPt) {
+  const boxMatrix = computeWatermarkMatrix(centerPt, rotationDeg, boxW, boxH);
+  const modelMatrix = multiply(boxMatrix, translate(alignedX, alignedY));
+  return multiply(pdfPageFlipMatrix(paperHeightPt), modelMatrix);
+}
+
+// The full model-space -> PDF-space matrix for a rotated IMAGE (Watermark
+// image only) of `imgW x imgH`, centered at `centerPt`, rotated by
+// `rotationDeg`. Same `embedPng`/unit-square correction
+// computeXObjectDrawMatrix() applies for Slot images (§14.5's known
+// handedness/size quirk, decision_log D-016) — composed the same way, just
+// against computeWatermarkMatrix()'s conceptual matrix instead of a Slot's.
+export function computeRotatedImageMatrix(centerPt, rotationDeg, imgW, imgH, paperHeightPt) {
+  const boxMatrix = computeWatermarkMatrix(centerPt, rotationDeg, imgW, imgH);
+  const conceptualMatrix = multiply(pdfPageFlipMatrix(paperHeightPt), boxMatrix);
+  return multiply(conceptualMatrix, multiply(pdfPageFlipMatrix(imgH), scaleXY(imgW, imgH)));
 }
 
 // §14.5 — sniffs the image FORMAT from its own magic bytes rather than
@@ -222,10 +283,69 @@ export function detectImageFormat(bytes) {
 // decision_log D-015) — the injection here is about keeping src/export.js
 // itself dependency-free, not about pdf-lib needing a browser.
 
+// --- Phase 10 Print Aids drawing helpers -----------------------------------
+
+// Simple, UNROTATED text at an already-computed anchor (Header/Footer/Page
+// Number — §16 gives these no rotation control) via pdf-lib's high-level
+// drawText(); sufficient here since there's no rotation pivot to reason
+// about. `anchor` is model-space (computeTextAnchorInBand, print-aids.js) —
+// this function does the one Y-flip itself.
+function drawAnchoredText(outPage, { text, anchor, font, sizePt, paperHeightPt, color }) {
+  if (!text) return;
+  const width = font.widthOfTextAtSize(text, sizePt);
+  let x = anchor.x;
+  if (anchor.align === 'center') x -= width / 2;
+  else if (anchor.align === 'right') x -= width;
+  const y = paperHeightPt - anchor.y - sizePt * 0.35; // same TEXT_BASELINE_OFFSET_FACTOR print-aids.js uses
+  outPage.drawText(text, { x, y, size: sizePt, font, color });
+}
+
+// Rotatable text (Text Box / Watermark text) drawn via the SAME low-level
+// operator sequence a Slot's image XObject uses below (pushGraphicsState /
+// `cm` / ... / popGraphicsState) — necessary because pdf-lib's own
+// high-level drawText(rotate:) cannot represent computeRotatedTextMatrix()'s
+// mirrored-handedness matrix (see that function's own comment). §16's
+// opacity control (Watermark) reuses pdf-lib's own ExtGState mechanism
+// (`page.maybeEmbedGraphicsState` — verified directly against the vendored
+// build, same one drawText's/drawImage's built-in `opacity` option uses).
+function drawMatrixText(outPage, pdfLib, { text, font, sizePt, matrix, color, opacity }) {
+  if (!text) return;
+  const fontKey = outPage.node.newFontDictionary('F', font.ref);
+  const gsKey = opacity != null && opacity < 1 ? outPage.maybeEmbedGraphicsState({ opacity }) : undefined;
+  outPage.pushOperators(
+    pdfLib.pushGraphicsState(),
+    ...(gsKey ? [pdfLib.setGraphicsState(gsKey)] : []),
+    pdfLib.concatTransformationMatrix(...matrix),
+    pdfLib.setFillingRgbColor(color.red, color.green, color.blue),
+    pdfLib.beginText(),
+    pdfLib.setFontAndSize(fontKey, sizePt),
+    pdfLib.setTextMatrix(1, 0, 0, 1, 0, 0),
+    pdfLib.showText(font.encodeText(text)),
+    pdfLib.endText(),
+    pdfLib.popGraphicsState(),
+  );
+}
+
+// Rotatable image (Watermark image only) — same raw-operator shape as the
+// Slot XObject placement loop in exportProjectToPdf() below, just with no
+// clip (a Watermark has no Slot-like boundary to clip to) and an optional
+// opacity ExtGState.
+function drawMatrixImage(outPage, pdfLib, { embedded, matrix, opacity }) {
+  const xObjectKey = outPage.node.newXObject('Content', embedded.ref);
+  const gsKey = opacity != null && opacity < 1 ? outPage.maybeEmbedGraphicsState({ opacity }) : undefined;
+  outPage.pushOperators(
+    pdfLib.pushGraphicsState(),
+    ...(gsKey ? [pdfLib.setGraphicsState(gsKey)] : []),
+    pdfLib.concatTransformationMatrix(...matrix),
+    pdfLib.drawObject(xObjectKey),
+    pdfLib.popGraphicsState(),
+  );
+}
+
 // §14.5 — embeds one Source exactly once; callers (exportProjectToPdf)
 // memoize the result across Slots so a Source used 8 times only embeds once.
 export async function embedSource(outDoc, source, binaryStore, deps) {
-  const { pdfLib, transcodeWebpToPng } = deps;
+  const { pdfLib, transcodeWebpToPng, rasterizeSvgToPng } = deps;
   const originalBytes = binaryStore.get(source.docId);
   if (!originalBytes) {
     throw new Error(`embedSource: no original bytes in SourceBinaryStore for docId ${source.docId} (source ${source.id})`);
@@ -261,6 +381,17 @@ export async function embedSource(outDoc, source, binaryStore, deps) {
     throw new Error(`embedSource: unrecognized image format for source ${source.id} (${source.fileName ?? 'unknown'})`);
   }
 
+  // §14 table — pdf-lib has no SVG embed path at all (vector, unlike WEBP's
+  // "unsupported raster encoding"), so this ALWAYS rasterizes, never
+  // conditionally like the WEBP branch above.
+  if (source.kind === 'svg') {
+    if (!rasterizeSvgToPng) {
+      throw new Error('embedSource: source is SVG but no deps.rasterizeSvgToPng was provided (§14.5)');
+    }
+    const pngBytes = await rasterizeSvgToPng(originalBytes, source.naturalWidth, source.naturalHeight);
+    return outDoc.embedPng(pngBytes);
+  }
+
   throw new Error(`embedSource: unsupported source kind "${source.kind}" for Export`);
 }
 
@@ -283,8 +414,24 @@ export async function exportProjectToPdf(state, deps) {
   outDoc.setCreationDate(new Date());
 
   const embeddedBySourceId = new Map(); // §14.5 resource dedup
+  const black = pdfLib.rgb(0, 0, 0); // no per-element color control in MVP, same as Crop Marks/Calibration (D-017)
 
-  for (const page of state.pages) {
+  // §16 "先只支援英數字(ASCII)" (user decision, D-019) — StandardFonts only,
+  // no fontkit. Lazily embedded (once per doc, memoized) so a Project using
+  // none of Header/Footer/Page Number/Text Box/Watermark text never pays for
+  // a font it doesn't need.
+  const fontsByWeight = new Map();
+  async function getFont(bold) {
+    const key = bold ? 'bold' : 'regular';
+    if (fontsByWeight.has(key)) return fontsByWeight.get(key);
+    const font = await outDoc.embedFont(bold ? pdfLib.StandardFonts.HelveticaBold : pdfLib.StandardFonts.Helvetica);
+    fontsByWeight.set(key, font);
+    return font;
+  }
+
+  const totalPages = state.pages.length;
+
+  for (const [pageIndex, page] of state.pages.entries()) {
     const paper = page.paper ?? state.project.paper;
     const { width, height } = roundedPaperSizePt(paper);
     const outPage = outDoc.addPage([width, height]);
@@ -307,7 +454,9 @@ export async function exportProjectToPdf(state, deps) {
 
       const slotAbsRectPt = computeSlotAbsoluteRectPt(slot, contentAreaPt);
       const matrix = computeXObjectDrawMatrix(slot, source, slotAbsRectPt, height);
-      const clipRectPt = computeExportClipRectPt(slotAbsRectPt, height);
+      // §16 Bleed — only the CLIP boundary expands; matrix/content sizing
+      // above still uses the Slot's own unexpanded rect (D-019).
+      const clipRectPt = computeBleedClipRectPt(slotAbsRectPt, state.project.bleed, height);
 
       const xObjectKey = outPage.node.newXObject('Content', embedded.ref);
       outPage.pushOperators(
@@ -338,8 +487,92 @@ export async function exportProjectToPdf(state, deps) {
             start: { x: seg.x1, y: seg.y1 },
             end: { x: seg.x2, y: seg.y2 },
             thickness: lineWidthPt,
-            color: pdfLib.rgb(0, 0, 0),
+            color: black,
           });
+        }
+      }
+    }
+
+    // §16 Header / Footer — plain, unrotated text in the margin band.
+    const headerFooter = state.project.headerFooter;
+    if (headerFooter?.header?.enabled && headerFooter.header.text) {
+      const bands = computeHeaderFooterBandsPt(width, height, contentAreaPt);
+      const font = await getFont(false); // eslint-disable-line no-await-in-loop
+      drawAnchoredText(outPage, {
+        text: headerFooter.header.text,
+        anchor: computeTextAnchorInBand(bands.header, headerFooter.header.align),
+        font,
+        sizePt: headerFooter.fontSizePt,
+        paperHeightPt: height,
+        color: black,
+      });
+    }
+    if (headerFooter?.footer?.enabled && headerFooter.footer.text) {
+      const bands = computeHeaderFooterBandsPt(width, height, contentAreaPt);
+      const font = await getFont(false); // eslint-disable-line no-await-in-loop
+      drawAnchoredText(outPage, {
+        text: headerFooter.footer.text,
+        anchor: computeTextAnchorInBand(bands.footer, headerFooter.footer.align),
+        font,
+        sizePt: headerFooter.fontSizePt,
+        paperHeightPt: height,
+        color: black,
+      });
+    }
+
+    // §16 Page Number — "1 / 10" format, one of 6 margin-band anchors.
+    if (state.project.pageNumber?.enabled) {
+      const { format, position, fontSizePt } = state.project.pageNumber;
+      const font = await getFont(false); // eslint-disable-line no-await-in-loop
+      drawAnchoredText(outPage, {
+        text: formatPageNumber(format, pageIndex + 1, totalPages),
+        anchor: computePageNumberAnchorPt(position, width, height, contentAreaPt),
+        font,
+        sizePt: fontSizePt,
+        paperHeightPt: height,
+        color: black,
+      });
+    }
+
+    // §16 Text Box — page-level annotations, drawn AFTER every Slot (always
+    // on top of Slot content) in their own independent z-order (D-019).
+    for (const box of sortByZOrder(page.textBoxes ?? [])) {
+      if (!box.text) continue;
+      const boxRectPt = computeSlotAbsoluteRectPt(box, contentAreaPt); // same x/y/w/h shape as a Slot
+      const centerPt = { x: boxRectPt.x + boxRectPt.w / 2, y: boxRectPt.y + boxRectPt.h / 2 };
+      // eslint-disable-next-line no-await-in-loop
+      const font = await getFont(box.bold);
+      const textWidth = font.widthOfTextAtSize(box.text, box.fontSizePt);
+      const origin = computeAlignedTextOrigin(boxRectPt.w, boxRectPt.h, textWidth, box.fontSizePt, box.align);
+      const matrix = computeRotatedTextMatrix(centerPt, box.rotationDeg, boxRectPt.w, boxRectPt.h, origin.x, origin.y, height);
+      drawMatrixText(outPage, pdfLib, { text: box.text, font, sizePt: box.fontSizePt, matrix, color: black });
+    }
+
+    // §16 Watermark — text or image, centered on the page, drawn LAST so it
+    // sits on top of everything else (Slots, Crop Marks, Text Boxes).
+    const watermark = state.project.watermark;
+    if (watermark?.enabled) {
+      const centerPt = computeWatermarkCenterPt(contentAreaPt);
+      if (watermark.type === 'text' && watermark.text) {
+        const font = await getFont(false); // eslint-disable-line no-await-in-loop
+        const textWidth = font.widthOfTextAtSize(watermark.text, watermark.fontSizePt);
+        const origin = computeAlignedTextOrigin(textWidth, watermark.fontSizePt, textWidth, watermark.fontSizePt, 'center');
+        const matrix = computeRotatedTextMatrix(centerPt, watermark.rotationDeg, textWidth, watermark.fontSizePt, origin.x, origin.y, height);
+        drawMatrixText(outPage, pdfLib, {
+          text: watermark.text, font, sizePt: watermark.fontSizePt, matrix, color: black, opacity: watermark.opacity,
+        });
+      } else if (watermark.type === 'image' && watermark.imageSourceId) {
+        const source = sourcesById.get(watermark.imageSourceId);
+        if (source) {
+          let embedded = embeddedBySourceId.get(watermark.imageSourceId);
+          if (!embedded) {
+            // eslint-disable-next-line no-await-in-loop
+            embedded = await embedSource(outDoc, source, binaryStore, deps);
+            embeddedBySourceId.set(watermark.imageSourceId, embedded);
+          }
+          const size = computeWatermarkImageSizePt(contentAreaPt.width, source.naturalWidth, source.naturalHeight, watermark.widthFraction);
+          const matrix = computeRotatedImageMatrix(centerPt, watermark.rotationDeg, size.width, size.height, height);
+          drawMatrixImage(outPage, pdfLib, { embedded, matrix, opacity: watermark.opacity });
         }
       }
     }

@@ -40,7 +40,14 @@ Designer),讓使用者把 PDF 與圖片自由排到指定紙張上,並輸出尺�
 - 不做色彩管理(ICC / CMYK 分色 / 疊印預覽)。
 - 不做完整 PDF 編輯(改內文、改字型、編輯既有註解)。
 - 不做書帖排版(signature / folding scheme)。
-- MVP 不做:雙面列印/背面對齊、SVG 輸出、文字框、浮水印、Bleed、Safe Area。
+- 不做雙面列印/背面對齊(名片、卡片類需求,留待更後續階段)。
+- 【已於 Phase 10 完成,不再排除】SVG Source(§14,匯出時光柵化為 PNG,
+  非向量輸出)、文字框、浮水印、Bleed、Safe Area——原列為 MVP(Phase
+  0-9)排除範圍,但一直是 plan.md §16/§22「第二階段功能」的既定範疇,
+  已在 Phase 10 實作,見 docs/decision_log.md D-019。
+- 文字框/浮水印目前僅支援 ASCII 文字(不支援中文),見 decision_log
+  D-019——非規格排除,是使用者明確做出的技術範圍決定,未來可加入
+  fontkit 解除此限制。
 - 不引入大型前端 Framework;能用原生 API 就不加依賴。
 
 ## 環境限制

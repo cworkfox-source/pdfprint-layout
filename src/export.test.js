@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSlot, createSource, createPaperSettings, createAppState, createPage, createProject, createCropMarksSettings } from './model.js';
+import { createSlot, createSource, createPaperSettings, createAppState, createPage, createProject, createCropMarksSettings, createBleedSettings, createTextBox } from './model.js';
 import { applyToPoint, boundingBoxOfTransformedRect } from './geometry.js';
 import {
   roundedPaperSizePt,
@@ -9,6 +9,9 @@ import {
   computeExportContentMatrix,
   computeXObjectDrawMatrix,
   computeExportClipRectPt,
+  computeBleedClipRectPt,
+  computeRotatedTextMatrix,
+  computeRotatedImageMatrix,
   detectImageFormat,
   embedSource,
   exportProjectToPdf,
@@ -79,6 +82,15 @@ test('computeContentRotationAndSize for an image: only slot.rotation applies, na
   assert.equal(result.contentH, 600);
 });
 
+test('computeContentRotationAndSize for an svg: treated exactly like an image (Phase 10)', () => {
+  const source = createSource({ kind: 'svg', naturalWidth: 200, naturalHeight: 100 });
+  const slot = createSlot({ rotation: 90 });
+  const result = computeContentRotationAndSize(source, slot);
+  assert.equal(result.rotation, 90);
+  assert.equal(result.contentW, 200);
+  assert.equal(result.contentH, 100);
+});
+
 test('computeContentRotationAndSize rejects an unsupported source kind', () => {
   const source = createSource({ kind: 'blank' });
   assert.throws(() => computeContentRotationAndSize(source, createSlot()), /unsupported source kind/);
@@ -129,6 +141,72 @@ test('computeExportClipRectPt converts an absolute model-space Slot rect to PDF 
   const slotAbsRectPt = { x: 50, y: 60, w: 100, h: 200 };
   const clip = computeExportClipRectPt(slotAbsRectPt, 800);
   assert.deepEqual(clip, { x: 50, y: 800 - 60 - 200, w: 100, h: 200 });
+});
+
+// --- computeBleedClipRectPt (§16 Bleed, Phase 10) ---------------------------
+
+test('computeBleedClipRectPt is a plain computeExportClipRectPt when bleed is disabled/absent', () => {
+  const slotAbsRectPt = { x: 50, y: 60, w: 100, h: 200 };
+  assert.deepEqual(
+    computeBleedClipRectPt(slotAbsRectPt, createBleedSettings({ enabled: false }), 800),
+    computeExportClipRectPt(slotAbsRectPt, 800),
+  );
+  assert.deepEqual(computeBleedClipRectPt(slotAbsRectPt, undefined, 800), computeExportClipRectPt(slotAbsRectPt, 800));
+});
+
+test('computeBleedClipRectPt expands the clip rect by sizePt on all sides when enabled, THEN flips to PDF space', () => {
+  const slotAbsRectPt = { x: 50, y: 60, w: 100, h: 200 };
+  const clip = computeBleedClipRectPt(slotAbsRectPt, createBleedSettings({ enabled: true, sizePt: 5 }), 800);
+  // expanded model rect: { x: 45, y: 55, w: 110, h: 210 } -> Y-flip
+  assert.deepEqual(clip, { x: 45, y: 800 - 55 - 210, w: 110, h: 210 });
+});
+
+// --- computeRotatedTextMatrix / computeRotatedImageMatrix (Text Box/
+// Watermark, Phase 10) -------------------------------------------------------
+// Pinned regression values, same convention as computeXObjectDrawMatrix's
+// own tests above: verify the FULL composed matrix against hand-computed
+// expectations for simple, unambiguous inputs (no rotation, then a 90°
+// rotation) rather than only checking it "looks plausible".
+
+test('computeRotatedTextMatrix with no rotation places the text local-origin at (alignedX, alignedY) relative to the box\'s top-left, flipped to PDF space', () => {
+  const centerPt = { x: 100, y: 50 }; // box center
+  const boxW = 80;
+  const boxH = 20;
+  const matrix = computeRotatedTextMatrix(centerPt, 0, boxW, boxH, 10, 15, 800);
+  // box top-left = center - (w/2, h/2) = (60, 40); local origin (10,15) inside
+  // the box -> model point (70, 55) -> PDF y = 800 - 55 = 745
+  const point = applyToPoint(matrix, 0, 0);
+  assertClose(point.x, 70);
+  assertClose(point.y, 745);
+});
+
+test('computeRotatedTextMatrix rotates 90 degrees the SAME visual direction as Preview\'s CSS rotation (no manual sign flip needed — the flip composition handles it)', () => {
+  // A rotation of the local +X axis (rightward, from the local origin) must,
+  // after a 90 deg rotation in the Y-down model convention (§6.3 — visually
+  // clockwise, same as Slot content), end up pointing in the model's +Y
+  // direction (downward). Once flipped to PDF space that is the -Y (page-
+  // down) direction — i.e. NOT the same sign as pdf-lib's own native CCW
+  // `rotate:` option would give for the same numeric angle (see the
+  // decision_log D-19 note on why this function avoids that option).
+  const centerPt = { x: 0, y: 0 };
+  const matrix = computeRotatedTextMatrix(centerPt, 90, 100, 100, 0, 0, 1000);
+  const origin = applyToPoint(matrix, 0, 0);
+  const alongLocalX = applyToPoint(matrix, 10, 0);
+  const modelDelta = { x: alongLocalX.x - origin.x, y: -(alongLocalX.y - origin.y) }; // un-flip the Y delta back to model space
+  assertClose(modelDelta.x, 0);
+  assertClose(modelDelta.y, 10); // model +Y (downward on screen) — visually clockwise, matching Slot rotation
+});
+
+test('computeRotatedImageMatrix places an unrotated image\'s 4 corners at the expected PDF-space rect (D-016\'s unit-square correction applied)', () => {
+  const centerPt = { x: 100, y: 100 };
+  const matrix = computeRotatedImageMatrix(centerPt, 0, 40, 20, 800);
+  // unit square (0,0)-(1,1) -> image rect [80,90]-[120,110] model -> PDF
+  const corner00 = applyToPoint(matrix, 0, 0);
+  const corner11 = applyToPoint(matrix, 1, 1);
+  assertClose(corner00.x, 80);
+  assertClose(corner00.y, 800 - 110); // bottom-left of the image in PDF space
+  assertClose(corner11.x, 120);
+  assertClose(corner11.y, 800 - 90);
 });
 
 // --- computeXObjectDrawMatrix (§14.1/§14.5, decision_log D-016) -------------
@@ -342,6 +420,37 @@ test('embedSource (image): a WEBP source without deps.transcodeWebpToPng throws 
   const outDoc = await pdfLib.PDFDocument.create();
   const webpSource = createSource({ kind: 'image', docId: 'doc-webp' });
   await assert.rejects(() => embedSource(outDoc, webpSource, binaryStore, { pdfLib }), /transcodeWebpToPng/);
+});
+
+// --- embedSource (svg, §14/§14.5, Phase 10) ---------------------------------
+
+test('embedSource (svg): ALWAYS rasterizes via deps.rasterizeSvgToPng, unconditionally (pdf-lib has no SVG embed path at all)', async () => {
+  const binaryStore = createBinaryStore();
+  const svgBytes = new TextEncoder().encode('<svg width="10" height="10"></svg>').buffer;
+  binaryStore.put('doc-svg', svgBytes);
+  const pdfLib = makeFakePdfLib();
+  const outDoc = await pdfLib.PDFDocument.create();
+  const svgSource = createSource({ kind: 'svg', docId: 'doc-svg', naturalWidth: 10, naturalHeight: 10 });
+  const rasterizeCalls = [];
+  const rasterizeSvgToPng = async (bytes, naturalWidth, naturalHeight) => {
+    rasterizeCalls.push({ bytes, naturalWidth, naturalHeight });
+    return new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+  };
+
+  await embedSource(outDoc, svgSource, binaryStore, { pdfLib, rasterizeSvgToPng });
+  assert.equal(rasterizeCalls.length, 1);
+  assert.equal(rasterizeCalls[0].naturalWidth, 10);
+  assert.equal(rasterizeCalls[0].naturalHeight, 10);
+  assert.equal(pdfLib.embedCalls[0].type, 'png');
+});
+
+test('embedSource (svg): without deps.rasterizeSvgToPng throws a clear error', async () => {
+  const binaryStore = createBinaryStore();
+  binaryStore.put('doc-svg', new Uint8Array([1]).buffer);
+  const pdfLib = makeFakePdfLib();
+  const outDoc = await pdfLib.PDFDocument.create();
+  const svgSource = createSource({ kind: 'svg', docId: 'doc-svg', naturalWidth: 10, naturalHeight: 10 });
+  await assert.rejects(() => embedSource(outDoc, svgSource, binaryStore, { pdfLib }), /rasterizeSvgToPng/);
 });
 
 test('embedSource throws a clear error when SourceBinaryStore has no bytes for the docId', async () => {

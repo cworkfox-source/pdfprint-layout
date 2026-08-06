@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createAppState, createProject, createPage, createSlot, createSource, createTemplate,
-  createCropMarksSettings, SCHEMA_VERSION,
+  createAppState, createProject, createPage, createSlot, createSource, createTemplate, createTextBox,
+  createCropMarksSettings, createBleedSettings, createSafeAreaSettings, createHeaderFooterSettings,
+  createPageNumberSettings, createWatermarkSettings, SCHEMA_VERSION,
 } from './model.js';
 import {
   serializeProject, migrateProjectData, deserializeProject, relinkSources, findMissingSourceIds,
@@ -48,27 +49,66 @@ test('migrateProjectData passes a current-version file through unchanged', () =>
   assert.deepEqual(migrateProjectData(json), json);
 });
 
-test('migrateProjectData v1 -> v2: fills in the missing cropMarks default (D-018)', () => {
+test('migrateProjectData v1 -> v3: cascades through v2, filling in cropMarks (D-018) and every Phase 10 print-aid default (D-019)', () => {
   // A hand-constructed v1-shaped file — exactly what createProject() used to
-  // produce before Phase 8 added cropMarks, i.e. no cropMarks key at all.
+  // produce before Phase 8 added cropMarks, i.e. no cropMarks key at all —
+  // and predating Phase 10's bleed/safeArea/headerFooter/pageNumber/
+  // watermark/textBoxes entirely. One migrateProjectData() call must walk
+  // it all the way to the CURRENT schema, not stop at the first step.
   const v1Json = {
     schemaVersion: 1,
     project: { name: '舊專案', paper: { size: 'A4', orientation: 'portrait' } },
     sources: [],
     templates: [],
-    pages: [],
+    pages: [createPage({ id: 'p1' })].map(({ textBoxes, ...rest }) => rest), // strip textBoxes to simulate a true pre-Phase-10 page
   };
   const migrated = migrateProjectData(v1Json);
-  assert.equal(migrated.schemaVersion, 2);
+  assert.equal(migrated.schemaVersion, 3);
   assert.deepEqual(migrated.project.cropMarks, createCropMarksSettings());
+  assert.deepEqual(migrated.project.bleed, createBleedSettings());
+  assert.deepEqual(migrated.project.safeArea, createSafeAreaSettings());
+  assert.deepEqual(migrated.project.headerFooter, createHeaderFooterSettings());
+  assert.deepEqual(migrated.project.pageNumber, createPageNumberSettings());
+  assert.deepEqual(migrated.project.watermark, createWatermarkSettings());
+  assert.deepEqual(migrated.pages[0].textBoxes, []);
   assert.equal(migrated.project.name, '舊專案'); // untouched fields survive
 });
 
-test('migrateProjectData v1 -> v2 does NOT clobber an already-present cropMarks (defensive, shouldn\'t happen for a real v1 file but must not silently overwrite user data if it did)', () => {
+test('migrateProjectData v1 -> v3 does NOT clobber an already-present cropMarks (defensive, shouldn\'t happen for a real v1 file but must not silently overwrite user data if it did)', () => {
   const customCropMarks = { enabled: true, lengthPt: 99, gapPt: 1, lineWidthPt: 2 };
   const v1Json = { schemaVersion: 1, project: { name: 'x', cropMarks: customCropMarks }, sources: [], templates: [], pages: [] };
   const migrated = migrateProjectData(v1Json);
   assert.deepEqual(migrated.project.cropMarks, customCropMarks);
+});
+
+test('migrateProjectData v2 -> v3: fills in Phase 10 print-aid defaults and per-page textBoxes (D-019)', () => {
+  const v2Json = {
+    schemaVersion: 2,
+    project: { name: 'v2-project', cropMarks: createCropMarksSettings() },
+    sources: [],
+    templates: [],
+    pages: [{ id: 'p1', paper: null, slots: [] }], // no textBoxes key — true pre-Phase-10 shape
+  };
+  const migrated = migrateProjectData(v2Json);
+  assert.equal(migrated.schemaVersion, 3);
+  assert.deepEqual(migrated.project.bleed, createBleedSettings());
+  assert.deepEqual(migrated.project.watermark, createWatermarkSettings());
+  assert.deepEqual(migrated.pages[0].textBoxes, []);
+});
+
+test('migrateProjectData v2 -> v3 does NOT clobber an already-present Phase 10 setting or textBoxes', () => {
+  const customWatermark = { enabled: true, type: 'text', text: 'CUSTOM', imageSourceId: null, opacity: 0.9, rotationDeg: 0, fontSizePt: 20, widthFraction: 0.5 };
+  const box = createTextBox({ id: 'existing-text', text: 'kept' });
+  const v2Json = {
+    schemaVersion: 2,
+    project: { name: 'x', cropMarks: createCropMarksSettings(), watermark: customWatermark },
+    sources: [],
+    templates: [],
+    pages: [{ id: 'p1', paper: null, slots: [], textBoxes: [box] }],
+  };
+  const migrated = migrateProjectData(v2Json);
+  assert.deepEqual(migrated.project.watermark, customWatermark);
+  assert.deepEqual(migrated.pages[0].textBoxes, [box]);
 });
 
 // --- deserializeProject -------------------------------------------------------
@@ -85,6 +125,9 @@ test('deserializeProject round-trips a serialized state back to an equivalent sh
 
   assert.equal(restored.project.name, state.project.name);
   assert.deepEqual(restored.project.cropMarks, state.project.cropMarks);
+  assert.deepEqual(restored.project.bleed, state.project.bleed);
+  assert.deepEqual(restored.project.watermark, state.project.watermark);
+  assert.deepEqual(restored.pages[0].textBoxes, []);
   assert.equal(restored.sources.length, 1);
   assert.equal(restored.sources[0].id, 'src-1'); // id preserved — Slot.sourceId references must keep resolving
   assert.equal(restored.templates.length, 1);

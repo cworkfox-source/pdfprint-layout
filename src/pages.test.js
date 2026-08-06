@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createPage, createSlot, createTemplate, createPaperSettings } from './model.js';
+import { createPage, createSlot, createTemplate, createPaperSettings, createTextBox } from './model.js';
 import { addPage, deletePage, duplicatePage, movePage, applyTemplateToPage } from './pages.js';
 
 function pagesOf(ids) {
@@ -67,6 +67,13 @@ test('duplicatePage copies Slot CONTENT too (sourceId included), unlike a Templa
   assert.notEqual(clone.slots[0].id, 's1'); // fresh slot id
 });
 
+test('duplicatePage copies Text Boxes too, with fresh ids (Phase 10)', () => {
+  const original = createPage({ id: 'a', textBoxes: [createTextBox({ id: 't1', text: 'Draft' })] });
+  const clone = duplicatePage([original], 'a')[1];
+  assert.equal(clone.textBoxes[0].text, 'Draft');
+  assert.notEqual(clone.textBoxes[0].id, 't1');
+});
+
 test('duplicatePage throws for an unknown id', () => {
   assert.throws(() => duplicatePage(pagesOf(['a']), 'missing'), /no page with id/);
 });
@@ -115,4 +122,13 @@ test('applyTemplateToPage regenerates Slot ids (applying the same Template twice
   const pageB = applyTemplateToPage(createPage(), template);
   assert.notEqual(pageA.slots[0].id, 'template-slot-1');
   assert.notEqual(pageA.slots[0].id, pageB.slots[0].id);
+});
+
+test('applyTemplateToPage also replaces Text Boxes wholesale, with fresh ids (Phase 10)', () => {
+  const page = createPage({ textBoxes: [createTextBox({ id: 'old-text', text: 'stale' })] });
+  const template = createTemplate({ name: 't', textBoxes: [createTextBox({ text: 'fresh' })] });
+  const result = applyTemplateToPage(page, template);
+  assert.equal(result.textBoxes.length, 1);
+  assert.equal(result.textBoxes[0].text, 'fresh');
+  assert.notEqual(result.textBoxes[0].id, 'old-text');
 });

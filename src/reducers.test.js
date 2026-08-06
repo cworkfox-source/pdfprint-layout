@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore } from './store.js';
-import { createAppState, createPage, createSlot, createSource, createTemplate } from './model.js';
+import { createAppState, createPage, createSlot, createSource, createTemplate, createTextBox } from './model.js';
 import {
   setPageSlotsAction,
   moveSlotsAction,
@@ -36,6 +36,22 @@ import {
   saveTemplateAction,
   deleteTemplateAction,
   applyTemplateAction,
+  setBleedAction,
+  setSafeAreaAction,
+  setHeaderFooterAction,
+  setPageNumberAction,
+  setWatermarkAction,
+  addTextBoxAction,
+  moveTextBoxesAction,
+  resizeTextBoxAction,
+  setTextBoxContentAction,
+  deleteTextBoxesAction,
+  duplicateTextBoxesAction,
+  bringTextBoxForwardAction,
+  sendTextBoxToBackAction,
+  alignSlotsLeftAction,
+  matchSlotsWidthAction,
+  distributeSlotsHorizontalAction,
 } from './reducers.js';
 
 function makeTwoPageState() {
@@ -409,4 +425,156 @@ test('applyTemplateAction throws for an unknown pageId', () => {
   const store = createStore(makeTwoPageState());
   const template = createTemplate({ name: 't', slots: [] });
   assert.throws(() => store.commit(applyTemplateAction('missing-page', template), null), /No page with id/);
+});
+
+// --- Print Aids (§16, Phase 10) ---------------------------------------------
+
+test('setBleedAction merges a partial update into state.project.bleed', () => {
+  const store = createStore(makeTwoPageState());
+  const beforeSize = store.getState().project.bleed.sizePt;
+  store.commit(setBleedAction({ enabled: true }), null);
+  const after = store.getState().project.bleed;
+  assert.equal(after.enabled, true);
+  assert.equal(after.sizePt, beforeSize);
+});
+
+test('setSafeAreaAction merges a partial update into state.project.safeArea', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(setSafeAreaAction({ enabled: true, marginPt: 15 }), null);
+  const after = store.getState().project.safeArea;
+  assert.equal(after.enabled, true);
+  assert.equal(after.marginPt, 15);
+});
+
+test('setHeaderFooterAction merges nested header/footer overrides without clobbering the untouched side', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(setHeaderFooterAction({ header: { enabled: true, text: 'Confidential' } }), null);
+  const after = store.getState().project.headerFooter;
+  assert.equal(after.header.enabled, true);
+  assert.equal(after.header.text, 'Confidential');
+  assert.equal(after.header.align, 'center'); // untouched header field survives
+  assert.equal(after.footer.enabled, false); // footer untouched entirely
+});
+
+test('setPageNumberAction merges a partial update into state.project.pageNumber', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(setPageNumberAction({ enabled: true, position: 'top-right' }), null);
+  const after = store.getState().project.pageNumber;
+  assert.equal(after.enabled, true);
+  assert.equal(after.position, 'top-right');
+  assert.equal(after.format, '{page} / {total}'); // untouched field survives
+});
+
+test('setWatermarkAction merges a partial update into state.project.watermark', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(setWatermarkAction({ enabled: true, text: 'DRAFT' }), null);
+  const after = store.getState().project.watermark;
+  assert.equal(after.enabled, true);
+  assert.equal(after.text, 'DRAFT');
+  assert.equal(after.opacity, 0.3); // untouched field survives
+});
+
+// --- Text Boxes (§16, Phase 10) ---------------------------------------------
+
+test('addTextBoxAction appends to the targeted page only', () => {
+  const store = createStore(makeTwoPageState());
+  const newBox = createTextBox({ id: 'box-1', text: 'Hello' });
+  store.commit(addTextBoxAction('page-a', newBox), null);
+  const state = store.getState();
+  assert.deepEqual(state.pages[0].textBoxes, [newBox]);
+  assert.deepEqual(state.pages[1].textBoxes, []);
+});
+
+test('moveTextBoxesAction translates the targeted box on the targeted page', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(addTextBoxAction('page-a', createTextBox({ id: 'box-1', x: 0, y: 0 })), null);
+  store.commit(moveTextBoxesAction('page-a', ['box-1'], 0.1, 0.1), null);
+  const box = store.getState().pages[0].textBoxes[0];
+  assert.equal(box.x, 0.1);
+  assert.equal(box.y, 0.1);
+});
+
+test('resizeTextBoxAction replaces the rect of one box', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(addTextBoxAction('page-a', createTextBox({ id: 'box-1' })), null);
+  store.commit(resizeTextBoxAction('page-a', 'box-1', { x: 0.1, y: 0.2, w: 0.5, h: 0.2 }), null);
+  const box = store.getState().pages[0].textBoxes[0];
+  assert.equal(box.w, 0.5);
+  assert.equal(box.h, 0.2);
+});
+
+test('setTextBoxContentAction merges partial content overrides', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(addTextBoxAction('page-a', createTextBox({ id: 'box-1', text: 'old', bold: false })), null);
+  store.commit(setTextBoxContentAction('page-a', 'box-1', { text: 'new', bold: true }), null);
+  const box = store.getState().pages[0].textBoxes[0];
+  assert.equal(box.text, 'new');
+  assert.equal(box.bold, true);
+});
+
+test('deleteTextBoxesAction removes only the targeted box', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(addTextBoxAction('page-a', createTextBox({ id: 'box-1' })), null);
+  store.commit(addTextBoxAction('page-a', createTextBox({ id: 'box-2' })), null);
+  store.commit(deleteTextBoxesAction('page-a', ['box-1']), null);
+  const boxes = store.getState().pages[0].textBoxes;
+  assert.equal(boxes.length, 1);
+  assert.equal(boxes[0].id, 'box-2');
+});
+
+test('duplicateTextBoxesAction clones the targeted box with a fresh id', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(addTextBoxAction('page-a', createTextBox({ id: 'box-1' })), null);
+  store.commit(duplicateTextBoxesAction('page-a', ['box-1']), null);
+  const boxes = store.getState().pages[0].textBoxes;
+  assert.equal(boxes.length, 2);
+  assert.notEqual(boxes[1].id, 'box-1');
+});
+
+test('bringTextBoxForwardAction / sendTextBoxToBackAction reorder z within the targeted page', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(addTextBoxAction('page-a', createTextBox({ id: 'box-1', z: 0 })), null);
+  store.commit(addTextBoxAction('page-a', createTextBox({ id: 'box-2', z: 1 })), null);
+  store.commit(bringTextBoxForwardAction('page-a', 'box-1'), null);
+  let boxes = store.getState().pages[0].textBoxes;
+  assert.equal(boxes.find((b) => b.id === 'box-1').z, 1);
+  assert.equal(boxes.find((b) => b.id === 'box-2').z, 0);
+
+  store.commit(sendTextBoxToBackAction('page-a', 'box-1'), null);
+  boxes = store.getState().pages[0].textBoxes;
+  assert.equal(boxes.find((b) => b.id === 'box-1').z, 0);
+  assert.equal(boxes.find((b) => b.id === 'box-2').z, 1);
+});
+
+test('text box actions throw for an unknown pageId', () => {
+  const store = createStore(makeTwoPageState());
+  assert.throws(() => store.commit(addTextBoxAction('missing-page', createTextBox()), null), /No page with id/);
+});
+
+// --- Align & Distribute (§9.6, Phase 10) ------------------------------------
+
+test('alignSlotsLeftAction/matchSlotsWidthAction/distributeSlotsHorizontalAction only touch the targeted page', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(setPageSlotsAction('page-a', [
+    createSlot({ id: 'x', x: 0.1, w: 0.1 }),
+    createSlot({ id: 'y', x: 0.5, w: 0.1 }),
+  ]), null);
+
+  store.commit(alignSlotsLeftAction('page-a', ['x', 'y']), null);
+  let slots = store.getState().pages[0].slots;
+  assert.equal(slots.find((s) => s.id === 'y').x, 0.1);
+  assert.equal(store.getState().pages[1].slots[0].id, 'b1'); // page-b untouched
+
+  store.commit(matchSlotsWidthAction('page-a', ['x', 'y']), null);
+  slots = store.getState().pages[0].slots;
+  assert.equal(slots.find((s) => s.id === 'y').w, slots.find((s) => s.id === 'x').w);
+
+  store.commit(setPageSlotsAction('page-a', [
+    createSlot({ id: 'x', x: 0, w: 0.1 }),
+    createSlot({ id: 'y', x: 0.3, w: 0.1 }),
+    createSlot({ id: 'z', x: 0.8, w: 0.1 }),
+  ]), null);
+  store.commit(distributeSlotsHorizontalAction('page-a', ['x', 'y', 'z']), null);
+  slots = store.getState().pages[0].slots;
+  assert.ok(Math.abs(slots.find((s) => s.id === 'y').x - 0.4) < 1e-9);
 });
