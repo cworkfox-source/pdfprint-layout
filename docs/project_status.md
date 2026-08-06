@@ -3,7 +3,7 @@
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
 Visual Page Imposition Designer, public repo.
 Phase 0–12 complete; `docs/remediation_plan.md` (R-1~R-7) fully closed.
-`index.html` (2,955,569 bytes) builds from `app.html`. 561 tests pass;
+`index.html` (2,956,845 bytes) builds from `app.html`. 561 tests pass;
 checkout is `master`. `docs/ui_improvement_plan.md` U-0~U-4 已執行;
 簡易/詳細模式、批次清除、Esc/空白處取消選取、Properties Panel resizer、
 Slot 點選編輯/刪除、文字框拖曳、多檔選取(修正 live-FileList bug)、

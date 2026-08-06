@@ -905,14 +905,11 @@
 
   function renderPropertiesPanel(st, page) {
     const body = $('properties-panel-body');
-    // Rebuilding the panel's innerHTML while one of its own inputs has focus
-    // (e.g. mid-drag on a range slider, mid-keystroke in a text field) would
-    // destroy and replace that very element — the drag/typing's next native
-    // event then targets a detached node and never reaches the delegated
-    // listener below. Skip the rebuild while focus is inside this panel;
-    // the panel catches up to the latest state on the next render after
-    // focus moves away (blur), which is what ends every edit gesture anyway.
-    if (document.activeElement && body.contains(document.activeElement)) return;
+    const focused = document.activeElement;
+    if (focused && body.contains(focused)) {
+      if (focused.tagName === 'BUTTON') focused.blur();
+      else return;
+    }
     const { slots, texts } = classifySelection(st, page);
     if (slots.length === 0 && texts.length === 0) {
       body.innerHTML = paperAndDocumentPanelHtml(st);
@@ -1341,7 +1338,7 @@
       case 'z-back': if (slotIds[0]) store.commit(sendSlotToBackAction(pageId, slotIds[0]), null); break;
       case 'delete-slot':
         if (slotIds.length) store.commit(deleteSlotsAction(pageId, slotIds), null);
-        store.commit(setSelectionAction([]), null, { historyEntry: false });
+        setSelection([]);
         break;
       case 'duplicate-slot': if (slotIds.length) store.commit(duplicateSlotsAction(pageId, slotIds), null); break;
       case 'text-z-front': if (textIds[0]) store.commit(bringTextBoxToFrontAction(pageId, textIds[0]), null); break;
@@ -1350,7 +1347,7 @@
       case 'text-z-back': if (textIds[0]) store.commit(sendTextBoxToBackAction(pageId, textIds[0]), null); break;
       case 'delete-text':
         if (textIds.length) store.commit(deleteTextBoxesAction(pageId, textIds), null);
-        store.commit(setSelectionAction([]), null, { historyEntry: false });
+        setSelection([]);
         break;
       case 'duplicate-text': if (textIds.length) store.commit(duplicateTextBoxesAction(pageId, textIds), null); break;
       case 'align-left': store.commit(alignSlotsLeftAction(pageId, slotIds), null); break;
@@ -1381,7 +1378,7 @@
         store.endCoalescing();
         break;
       }
-      case 'clear-selection': store.commit(setSelectionAction([]), null, { historyEntry: false }); break;
+      case 'clear-selection': setSelection([]); break;
       case 'apply-template': {
         const templateId = $('pp-template-select').value;
         const template = builtInTemplates.find((t) => t.id === templateId) ?? st.templates.find((t) => t.id === templateId);
@@ -1637,7 +1634,12 @@
       if (slot && !slot.locked && afterSelection.includes(slotId)) {
         const movingIds = afterSelection.filter((id) => id.startsWith('slot-'));
         const startRects = new Map(page.slots.filter((s) => movingIds.includes(s.id)).map((s) => [s.id, { x: s.x, y: s.y, w: s.w, h: s.h }]));
-        dragState = { type: 'move', pageId, slotIds: movingIds, startRects, clientX: e.clientX, clientY: e.clientY };
+        dragState = {
+          type: 'move', pageId, slotIds: movingIds, startRects,
+          clientX: e.clientX, clientY: e.clientY,
+          startClientX: e.clientX, startClientY: e.clientY,
+          clickedSlotId: slotId, hasMoved: false,
+        };
         // Capture on paperHost itself (stable across renders), never on
         // e.target — a slot that was just selected gets its DOM node
         // rebuilt by the very render() the setSelection() commit above
@@ -1713,6 +1715,9 @@
     }
 
     if (dragState.type === 'move') {
+      if (Math.hypot(e.clientX - dragState.startClientX, e.clientY - dragState.startClientY) > 3) {
+        dragState.hasMoved = true;
+      }
       const { dx, dy } = normDeltaFromPointer(e, dragState);
       const page = currentPage();
       if (dragState.slotIds.length === 1 && snapEnabled()) {
@@ -1788,6 +1793,9 @@
       const merged = dragState.additive ? [...new Set([...dragState.baseSelection, ...hit])] : hit;
       setSelection(merged);
     } else {
+      if (dragState.type === 'move' && dragState.clickedSlotId && !dragState.hasMoved) {
+        setSelection([dragState.clickedSlotId]);
+      }
       store.endCoalescing();
     }
     dragState = null;

@@ -2,6 +2,46 @@
 
 > Older entries: docs/logs/ (archive, do not load at startup)
 
+## 2026-08-06 19:20 | Product UI | Fixed "Back to Document Properties" button unresponsiveness in Properties Panel
+
+### Type
+Bugfix / UI
+
+### Summary
+Clicking the "← 回到文件屬性" (clear-selection) button in the Properties Panel had no effect because:
+1. `handlePropertiesPanelAction('clear-selection')` bypassed `setSelection([])` and called `store.commit(setSelectionAction([])...)` directly.
+2. `setSelection` handles blurring active focused elements inside `properties-panel-body`. Bypassing it left focus on the clicked `<button data-action="clear-selection">`.
+3. `renderPropertiesPanel()`'s focus guard skipped re-rendering whenever `document.activeElement` was inside `properties-panel-body`. Because the button retained focus, re-rendering returned early without rebuilding `body.innerHTML`.
+
+Fix:
+- `renderPropertiesPanel()` now explicitly blurs `document.activeElement` if it is a `<button>` inside `properties-panel-body` instead of returning early.
+- `handlePropertiesPanelAction()` actions (`clear-selection`, `delete-slot`, `delete-text`, `apply-preset`, `apply-grid`) now call `setSelection([])` consistently.
+
+### Files Changed
+- `app.html` — Updated `renderPropertiesPanel()` focus guard and `handlePropertiesPanelAction` button handlers.
+- `index.html` — Rebuilt single-file executable (2,956,845 bytes).
+
+### Verification
+`npm test`: 561/561 passed. `npm run build`: `index.html` built successfully.
+
+## 2026-08-06 19:15 | Product UI | Fixed Slot click selection behavior & dev-server root path
+
+### Type
+Bugfix / UI
+
+### Summary
+Diagnosed and resolved issues where clicking a Slot on the paper canvas might not switch the right-side panel to "格位屬性".
+1. In dev-server (`scripts/dev-server.mjs`), visiting `http://localhost:5173/` rendered the legacy Phase 1 dev harness (`/dev/index.html`) which has no properties panel. Updated root route to serve `app.html` directly.
+2. In `app.html`, clicking a Slot when multiple slots were already selected now refines selection to the single clicked slot on mouse release (if no drag movement > 3px occurred), switching the right panel from multi-slot alignment to single Slot properties.
+
+### Files Changed
+- `scripts/dev-server.mjs` — Default `/` route changed from `/dev/index.html` to `/app.html`.
+- `app.html` — Tracked initial `pointerdown` coordinates and `hasMoved` distance threshold in `dragState` to narrow selection to the clicked slot on non-drag pointer release.
+- `index.html` — Rebuilt single-file executable (2,956,923 bytes).
+
+### Verification
+`npm test`: 561/561 passed. `npm run build`: `index.html` built successfully.
+
 ## 2026-08-06 18:40 | Product UI | Slot Properties panel can now assign/replace a Slot's content by clicking
 
 ### Type
