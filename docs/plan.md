@@ -650,9 +650,23 @@ PDF 原始頁面必須維持 Vector / Text / Line，**避免 Rasterization**。
 └──────────────┴──────────────────────┴──────────────┘
 ```
 
+產品 UI 提供「簡易／詳細」兩種密度模式，預設為簡易模式；簡易模式保留
+Source Gallery、Paper Canvas、版型/紙張設定與常用操作，詳細模式才展開
+進階工具列、頁面管理與完整 Properties Panel。模式偏好可由瀏覽器本機
+儲存，不能寫入任何使用者檔案內容。Canvas viewport 必須允許縮小
+(`min-width: 0`)，Properties Panel 可在 240 px 至
+`min(720 px, viewport 寬度 × 60%)` 間拖曳調整，雙擊回復 300 px。
+
 ### 18.2 [M] Properties Panel
 
 依選取物件切換：Paper Properties、Slot Properties、Image Properties、Text Properties（[S]）、Export Properties。
+未選取時顯示文件屬性；選取 Slot、Text Box 或多個物件時顯示對應面板，
+並提供「回到文件屬性」操作。簡易模式保留 Fit、Scale、Rotation、清除
+內容等高頻操作，詳細模式再展開 Offset、Flip、鎖定、分割、Z-order、
+Bleed、Safe Area、Header/Footer、頁碼、浮水印與 Crop Marks 等欄位。
+Source Gallery 提供「清空所有格位內容」與「清空所有來源」兩個獨立
+動作；後者必須顯示影響數量並要求確認，兩者各自只產生一筆 Undo。
+點擊 Canvas 空白處或按 `Esc` 清除選取並回到文件屬性。
 
 ### 18.3 [S] 鍵盤快捷鍵
 
@@ -662,6 +676,7 @@ PDF 原始頁面必須維持 Vector / Text / Line，**避免 Rasterization**。
 | `Ctrl+C` / `Ctrl+V` | 複製 / 貼上 |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / Redo（**[M]**） |
 | `Ctrl+A` | 全選 |
+| `Esc` | 取消選取，回到文件屬性 |
 | `Arrow` | 微移 |
 | `Shift+Arrow` | 大幅微移 |
 

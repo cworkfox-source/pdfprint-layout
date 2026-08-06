@@ -3,8 +3,10 @@
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
 Visual Page Imposition Designer, public repo.
 Phase 0–12 complete; `docs/remediation_plan.md` (R-1~R-7) fully closed.
-`index.html` (2,948,131 bytes) now builds from the real product UI
-`app.html`, not a dev harness. 560 tests pass; checkout is `master`.
+`index.html` (2,954,661 bytes) now builds from the real product UI
+`app.html`, not a dev harness. 561 tests pass; checkout is `master`.
+`docs/ui_improvement_plan.md` U-0~U-4 已執行;簡易/詳細模式、批次清除、
+Esc/空白處取消選取與 Properties Panel resizer 已接線,尚未提交。
 
 ## Current Version
 Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 11 Standalone Build 完成
@@ -491,6 +493,11 @@ work 直接延續在該分支上。另有一個更早、未整合的分支
     重新渲染」而不只是 metadata 比對成功。詳見 change_log
     2026-08-06 13:10~16:30 各條目。
 
+- UI 改善計畫 U-0~U-4(2026-08-06):`app.html` 補上簡易/詳細模式及偏好
+  記憶、Canvas 空白處與 `Esc` 取消選取、格位內容/來源分離清除且各自
+  一筆 Undo、以及可拖曳/雙擊重設的 Properties Panel 寬度控制;新增
+  `src/keymap.test.js` 回歸測試,build 後 `index.html` 已同步更新。
+
 ## Features In Development
 無。Phase 0–12、Standalone Build 與 `docs/remediation_plan.md` 全部
 7 個工作包(R-1~R-7)皆已完成。
@@ -725,7 +732,8 @@ registry tarball,見 decision_log D-015;Phase 7 起實際使用)、esbuild
 (2026-08-05 移除無關的 Python 打包 playbook)。
 
 ## Future Roadmap
-Phase 12(plan §22 最後階段,含 Product UI)已完成：esbuild 打包成單一
+Phase 12(plan §22 最後階段,含 Product UI)與 UI 改善計畫 U-0~U-4 已完成：
+esbuild 打包成單一
 IIFE `index.html`(entry 為 `app.html`),完成單檔/離線靜態驗證 +
 `file://` 冒煙測試。首次正式發布時應建立 GitHub Release `v1.0.0`
 (APP_VERSION 常數,`app.html`)供 §19.4 更新檢查比對;Chrome / Edge 的

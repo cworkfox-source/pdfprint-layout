@@ -16,6 +16,9 @@
     --danger: #dc2626;
     --toolbar-h: 48px;
     --pages-strip-h: 96px;
+    --gallery-w: 220px;
+    --resizer-w: 6px;
+    --props-w: 300px;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -56,7 +59,7 @@
   }
   #main {
     display: grid;
-    grid-template-columns: 220px 1fr 260px;
+    grid-template-columns: var(--gallery-w) 1fr var(--resizer-w) var(--props-w);
     min-height: 0;
   }
   .panel {
@@ -64,7 +67,14 @@
     display: flex; flex-direction: column;
   }
   #source-gallery-panel { border-right: 1px solid var(--border); }
-  #properties-panel { border-left: 1px solid var(--border); }
+  /* Drag handle between canvas and Properties Panel: widening the panel is
+     the cheapest way to cut down on scrolling inside it. */
+  #props-resizer { background: var(--border); cursor: col-resize; touch-action: none; }
+  #props-resizer:hover, #props-resizer.dragging { background: var(--accent); }
+  /* Simple mode (default) hides everything tagged .adv-only; Advanced mode
+     shows the full feature set. Applied via a body attribute so freshly
+     re-rendered Properties Panel markup picks it up with no extra JS. */
+  body[data-ui-mode="simple"] .adv-only { display: none !important; }
   .panel-header {
     font-size: 12px; font-weight: 600; color: var(--text-muted);
     padding: 8px 10px; border-bottom: 1px solid var(--border);
@@ -73,7 +83,7 @@
   }
   .panel-body { padding: 10px; flex: 1; }
   #canvas-viewport {
-    overflow: auto; display: flex; align-items: flex-start;
+    overflow: auto; display: flex; align-items: flex-start; min-width: 0;
     justify-content: center; padding: 32px; background: var(--bg);
   }
   #canvas-empty-hint {
@@ -207,21 +217,24 @@
   }
 </style>
 </head>
-<body>
+<body data-ui-mode="simple">
 <div class="app-shell">
   <div id="toolbar">
     <h1>拼版設計工具</h1>
     <div class="sep"></div>
-    <button id="btn-open-project" title="開啟專案(.json)">開啟專案</button>
-    <button id="btn-save-project" title="儲存目前專案為 .json">儲存專案</button>
+    <button id="ui-mode-simple" title="簡易介面:只保留載入、版型、匯出等常用操作">簡易</button>
+    <button id="ui-mode-advanced" title="詳細介面:顯示全部進階功能">詳細</button>
+    <div class="sep adv-only"></div>
+    <button id="btn-open-project" class="adv-only" title="開啟專案(.json)">開啟專案</button>
+    <button id="btn-save-project" class="adv-only" title="儲存目前專案為 .json">儲存專案</button>
     <input id="file-input-project" class="visually-hidden" type="file" accept=".json,application/json">
     <div class="sep"></div>
     <button id="btn-undo" title="復原(Ctrl+Z)">復原</button>
     <button id="btn-redo" title="重做(Ctrl+Y)">重做</button>
-    <div class="sep"></div>
-    <button id="mode-select" title="選取模式">選取</button>
-    <button id="mode-create" title="建立模式(拖曳空白處建立新格位,§9.4)">建立格位</button>
-    <label style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="snap-toggle" checked> 吸附</label>
+    <div class="sep adv-only"></div>
+    <button id="mode-select" class="adv-only" title="選取模式">選取</button>
+    <button id="mode-create" class="adv-only" title="建立模式(拖曳空白處建立新格位,§9.4)">建立格位</button>
+    <label class="adv-only" style="display:flex;align-items:center;gap:4px;"><input type="checkbox" id="snap-toggle" checked> 吸附</label>
     <div class="sep"></div>
     <label style="display:flex;align-items:center;gap:4px;">
       縮放
@@ -235,14 +248,14 @@
         <option value="200%">200%</option>
       </select>
     </label>
-    <div class="sep"></div>
-    <button id="btn-check-update" title="檢查更新">檢查更新</button>
-    <span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">將連線 GitHub 查詢最新版本</span>
+    <div class="sep adv-only"></div>
+    <button id="btn-check-update" class="adv-only" title="檢查更新">檢查更新</button>
+    <span class="adv-only" style="font-size:11px;color:var(--text-muted);white-space:nowrap;">將連線 GitHub 查詢最新版本</span>
     <div class="spacer"></div>
     <span id="status-line"></span>
     <div class="sep"></div>
     <button id="btn-print" title="列印(經由匯出的 PDF)">列印</button>
-    <button id="btn-calibration" title="列印校正頁(100mm 測試框)">校正頁</button>
+    <button id="btn-calibration" class="adv-only" title="列印校正頁(100mm 測試框)">校正頁</button>
     <button id="btn-export" class="primary" title="匯出為 PDF">匯出 PDF</button>
     <div class="sep"></div>
     <button id="btn-help" title="說明">說明</button>
@@ -255,6 +268,12 @@
         <div id="gallery-toolbar">
           <div class="row">
             <button id="btn-load-files" style="flex:1;">載入 PDF / 圖片 / SVG</button>
+          </div>
+          <div class="row">
+            <button id="btn-clear-slots" style="flex:1;" title="保留來源清單,清空所有格位中的內容">清空所有格位內容</button>
+          </div>
+          <div class="row">
+            <button id="btn-clear-sources" style="flex:1;" title="移除全部已載入的來源,並清空所有格位中已放入的內容">一鍵清除全部來源</button>
           </div>
           <div class="row">
             <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-muted);white-space:nowrap;">
@@ -284,6 +303,8 @@
       <div id="paper-host"></div>
     </div>
 
+    <div id="props-resizer" title="拖曳可調整屬性面板寬度(可雙擊還原預設寬度)"></div>
+
     <div id="properties-panel" class="panel">
       <div class="panel-header">屬性</div>
       <div id="properties-panel-body" class="panel-body"></div>
@@ -295,8 +316,8 @@
     <div id="pages-strip-body"></div>
     <button id="btn-add-page" title="新增空白頁">+ 新增</button>
     <button id="btn-duplicate-page" title="複製目前頁面">複製</button>
-    <button id="btn-move-page-up" title="上移">↑</button>
-    <button id="btn-move-page-down" title="下移">↓</button>
+    <button id="btn-move-page-up" class="adv-only" title="上移">↑</button>
+    <button id="btn-move-page-down" class="adv-only" title="下移">↓</button>
     <button id="btn-delete-page" title="刪除目前頁面">刪除</button>
   </div>
 </div>
@@ -334,6 +355,7 @@
         <li>需要一次填滿多頁時,於右側「屬性」面板使用「Auto Fill 自動
           填版」。</li>
         <li>按頂部工具列的「匯出 PDF」或「列印」。</li>
+        <li>工具列左側可切換「簡易 / 詳細」介面；簡易模式保留最常用的排版與輸出操作。</li>
       </ol>
     </section>
     <section>
@@ -486,6 +508,41 @@
     mode = next;
     $('mode-select').classList.toggle('active', mode === 'select');
     $('mode-create').classList.toggle('active', mode === 'create');
+  }
+
+  const DEFAULT_PROPS_WIDTH = 300;
+  const MIN_PROPS_WIDTH = 240;
+  const MAX_PROPS_WIDTH = 720;
+
+  function safeStorageGet(key) {
+    try { return window.localStorage.getItem(key); } catch { return null; }
+  }
+
+  function safeStorageSet(key, value) {
+    try { window.localStorage.setItem(key, value); } catch { /* file:// or blocked storage */ }
+  }
+
+  function propsMaxWidth() {
+    return Math.max(MIN_PROPS_WIDTH, Math.min(MAX_PROPS_WIDTH, window.innerWidth * 0.6));
+  }
+
+  function clampPropsWidth(width) {
+    return Math.round(Math.max(MIN_PROPS_WIDTH, Math.min(propsMaxWidth(), Number(width) || DEFAULT_PROPS_WIDTH)));
+  }
+
+  function setPropsWidth(width) {
+    const clamped = clampPropsWidth(width);
+    document.documentElement.style.setProperty('--props-w', `${clamped}px`);
+    return clamped;
+  }
+
+  function setUiMode(next) {
+    const uiMode = next === 'advanced' ? 'advanced' : 'simple';
+    document.body.dataset.uiMode = uiMode;
+    $('ui-mode-simple').classList.toggle('active', uiMode === 'simple');
+    $('ui-mode-advanced').classList.toggle('active', uiMode === 'advanced');
+    if (uiMode === 'simple') setMode('select');
+    safeStorageSet('ui-mode', uiMode);
   }
   function snapEnabled() {
     return $('snap-toggle').checked;
@@ -688,6 +745,12 @@
     const list = $('gallery-list');
     list.innerHTML = '';
     $('gallery-empty').classList.toggle('hidden', st.sources.length > 0);
+    const assignedSlotCount = st.pages.reduce(
+      (count, page) => count + page.slots.filter((slot) => !!slot.sourceId).length,
+      0,
+    );
+    $('btn-clear-slots').disabled = assignedSlotCount === 0;
+    $('btn-clear-sources').disabled = st.sources.length === 0;
 
     for (const source of st.sources) {
       const tile = document.createElement('div');
@@ -747,21 +810,74 @@
   // this Source, THEN drop it from AppState and release its engine caches.
   async function deleteSource(source) {
     const st = state();
+    const coalesceKey = `del-src:${source.id}`;
     for (const page of st.pages) {
       for (const slot of page.slots) {
         if (slot.sourceId === source.id) {
-          store.commit(clearSlotContentAction(page.id, slot.id), null);
+          store.commit(clearSlotContentAction(page.id, slot.id), null, { coalesceKey });
         }
       }
     }
     if (st.project.watermark?.imageSourceId === source.id) {
-      store.commit(setWatermarkAction({ imageSourceId: null }), null);
+      store.commit(setWatermarkAction({ imageSourceId: null }), null, { coalesceKey });
     }
-    store.commit(removeSourceAction(source.id), null);
+    store.commit(removeSourceAction(source.id), null, { coalesceKey });
+    store.endCoalescing();
     sources.delete(source.id);
     requestedPreviews.delete(source.id);
     await engine.releaseSource(source);
     render();
+  }
+
+  function assignedSlots(st) {
+    return st.pages.flatMap((page) => page.slots
+      .filter((slot) => !!slot.sourceId)
+      .map((slot) => ({ page, slot })));
+  }
+
+  function clearAllSlotContent() {
+    const st = state();
+    const affected = assignedSlots(st);
+    if (affected.length === 0) return false;
+    const pageCount = new Set(affected.map(({ page }) => page.id)).size;
+    if (!window.confirm(`將清空 ${pageCount} 頁共 ${affected.length} 個格位的內容,確定嗎?`)) return false;
+
+    for (const { page, slot } of affected) {
+      store.commit(clearSlotContentAction(page.id, slot.id), null, { coalesceKey: 'clear-all-slots' });
+    }
+    store.endCoalescing();
+    toast(`已清空 ${affected.length} 個格位的內容,來源清單仍保留`);
+    return true;
+  }
+
+  async function clearAllSources() {
+    const st = state();
+    if (st.sources.length === 0) return false;
+    const affected = assignedSlots(st);
+    const pageCount = new Set(affected.map(({ page }) => page.id)).size;
+    if (!window.confirm(
+      `將清空 ${pageCount} 頁共 ${affected.length} 個格位的內容,並移除 ${st.sources.length} 個來源,確定嗎?`,
+    )) return false;
+
+    for (const { page, slot } of affected) {
+      store.commit(clearSlotContentAction(page.id, slot.id), null, { coalesceKey: 'clear-all-sources' });
+    }
+    if (st.project.watermark?.imageSourceId) {
+      store.commit(setWatermarkAction({ imageSourceId: null }), null, { coalesceKey: 'clear-all-sources' });
+    }
+    const releaseList = st.sources.map((source) => sources.get(source.id) ?? source);
+    for (const source of st.sources) {
+      store.commit(removeSourceAction(source.id), null, { coalesceKey: 'clear-all-sources' });
+    }
+    store.endCoalescing();
+
+    for (const source of releaseList) {
+      sources.delete(source.id);
+      requestedPreviews.delete(source.id);
+    }
+    await Promise.all(releaseList.map((source) => engine.releaseSource(source)));
+    toast(`已清除 ${releaseList.length} 個來源,格位已保留`);
+    return true;
   }
 
   // --- Properties Panel (§18.2, Phase 12 12c) -----------------------------
@@ -798,7 +914,7 @@
       body.innerHTML = `
         <div class="panel-section-title">已選取 ${slots.length + texts.length} 個項目</div>
         <div class="hint-text">混合類型或多個文字框的選取暫不支援批次編輯。</div>
-        <div class="field-row"><button data-action="clear-selection" style="flex:1">清除選取</button></div>
+        <div class="field-row"><button data-action="clear-selection" style="flex:1">← 回到文件屬性</button></div>
       `;
     }
   }
@@ -820,8 +936,8 @@
     const posOption = (value, current, label) => `<option value="${value}" ${current === value ? 'selected' : ''}>${label}</option>`;
 
     return `
-      <div class="panel-section-title">專案</div>
-      <div class="field-grid">
+      <div class="panel-section-title adv-only">專案</div>
+      <div class="field-grid adv-only">
         <label class="span2">專案名稱 <input type="text" data-field="project.name" value="${escapeHtml(st.project.name)}"></label>
       </div>
       <details open>
@@ -848,9 +964,9 @@
           欄 <input id="pp-grid-cols" type="number" min="1" value="2" style="width:3.5em">
           <button data-action="apply-grid">套用自訂 Grid</button>
         </div>
-        <div class="field-row"><button data-action="add-text-box" style="flex:1">新增文字框</button></div>
+        <div class="field-row adv-only"><button data-action="add-text-box" style="flex:1">新增文字框</button></div>
       </details>
-      <details>
+      <details class="adv-only">
         <summary>版型範本 Template(§17.3)</summary>
         <div class="field-row">
           <select id="pp-template-select" style="flex:1">
@@ -881,7 +997,7 @@
         <div class="field-row"><button data-action="run-auto-fill" style="flex:1">以目前頁版型執行 Auto Fill</button></div>
         <div class="hint-text">依填版規則把所有已載入來源展開成多頁,整段取代目前頁。</div>
       </details>
-      <details>
+      <details class="adv-only">
         <summary>Bleed 出血</summary>
         <div class="field-row">
           <label><input type="checkbox" data-field="bleed.enabled" ${bleed.enabled ? 'checked' : ''}> 啟用</label>
@@ -889,14 +1005,14 @@
         </div>
         <div class="hint-text">只影響 Export 裁切邊界,不連動改變內容縮放(cover fit 才會實際延伸進出血區)</div>
       </details>
-      <details>
+      <details class="adv-only">
         <summary>Safe Area 安全範圍(僅預覽)</summary>
         <div class="field-row">
           <label><input type="checkbox" data-field="safeArea.enabled" ${safeArea.enabled ? 'checked' : ''}> 啟用</label>
           邊距 mm <input type="number" step="0.5" style="width:4.5em" data-field="safeArea.marginPt" value="${ptToMm(safeArea.marginPt).toFixed(1)}">
         </div>
       </details>
-      <details>
+      <details class="adv-only">
         <summary>頁首 / 頁尾</summary>
         <div class="field-grid">
           <label><input type="checkbox" data-field="headerFooter.header.enabled" ${hf.header.enabled ? 'checked' : ''}> 啟用頁首</label>
@@ -908,7 +1024,7 @@
         </div>
         <div class="hint-text">僅支援 ASCII 字元(§16,尚不支援中文)</div>
       </details>
-      <details>
+      <details class="adv-only">
         <summary>頁碼</summary>
         <div class="field-grid">
           <label><input type="checkbox" data-field="pageNumber.enabled" ${pn.enabled ? 'checked' : ''}> 啟用</label>
@@ -919,7 +1035,7 @@
           <label class="span2">格式(可用 {page} {total}) <input type="text" data-field="pageNumber.format" value="${escapeHtml(pn.format)}"></label>
         </div>
       </details>
-      <details>
+      <details class="adv-only">
         <summary>浮水印</summary>
         <div class="field-grid">
           <label><input type="checkbox" data-field="watermark.enabled" ${wm.enabled ? 'checked' : ''}> 啟用</label>
@@ -935,7 +1051,7 @@
         </div>
         <div class="hint-text">固定置中(§16,不提供角落位置選項)。文字僅支援 ASCII。</div>
       </details>
-      <details>
+      <details class="adv-only">
         <summary>裁切標記 Crop Marks</summary>
         <div class="field-grid">
           <label><input type="checkbox" data-field="cropMarks.enabled" ${cm.enabled ? 'checked' : ''}> 啟用</label>
@@ -952,28 +1068,32 @@
       .map((v) => `<option value="${v}" ${slot.fitMode === v ? 'selected' : ''}>${v}</option>`).join('');
     return `
       <div class="panel-section-title">格位屬性</div>
+      <div class="field-row"><button data-action="clear-selection" style="flex:1">← 回到文件屬性</button></div>
       <div class="field-grid">
         <label>Fit 模式 <select data-slot-field="fitMode">${fitOptions}</select></label>
         <label>縮放 <input type="number" step="0.05" min="0.05" data-slot-field="scale" value="${slot.scale}"></label>
         <label class="span2">旋轉角度:${slot.rotation}° <button data-action="rotate-90" style="width:100%">旋轉 90°</button></label>
-        <label>水平偏移 <input type="range" min="-0.5" max="0.5" step="0.01" data-slot-field="offsetX" value="${slot.offsetX}"></label>
-        <label>垂直偏移 <input type="range" min="-0.5" max="0.5" step="0.01" data-slot-field="offsetY" value="${slot.offsetY}"></label>
-        <label><input type="checkbox" data-slot-field="flipX" ${slot.flipX ? 'checked' : ''}> 水平翻轉</label>
-        <label><input type="checkbox" data-slot-field="flipY" ${slot.flipY ? 'checked' : ''}> 垂直翻轉</label>
-        <label><input type="checkbox" data-slot-field="locked" ${slot.locked ? 'checked' : ''}> 鎖定</label>
+        <label class="adv-only">水平偏移 <input type="range" min="-0.5" max="0.5" step="0.01" data-slot-field="offsetX" value="${slot.offsetX}"></label>
+        <label class="adv-only">垂直偏移 <input type="range" min="-0.5" max="0.5" step="0.01" data-slot-field="offsetY" value="${slot.offsetY}"></label>
+        <label class="adv-only"><input type="checkbox" data-slot-field="flipX" ${slot.flipX ? 'checked' : ''}> 水平翻轉</label>
+        <label class="adv-only"><input type="checkbox" data-slot-field="flipY" ${slot.flipY ? 'checked' : ''}> 垂直翻轉</label>
+        <label class="adv-only"><input type="checkbox" data-slot-field="locked" ${slot.locked ? 'checked' : ''}> 鎖定</label>
       </div>
       <div class="field-row"><button data-action="clear-slot-content" style="flex:1">清除內容</button></div>
-      <div class="panel-section-title">分割(§9.3)</div>
-      <div class="field-row">
+      <div class="panel-section-title adv-only">分割(§9.3)</div>
+      <div class="field-row adv-only">
         <button data-action="split-h" style="flex:1">水平分割(上下)</button>
         <button data-action="split-v" style="flex:1">垂直分割(左右)</button>
       </div>
-      <div class="panel-section-title">Z 順序 / 操作</div>
-      <div class="btn-grid">
+      <div class="panel-section-title adv-only">Z 順序</div>
+      <div class="btn-grid adv-only">
         <button data-action="z-front">最前</button>
         <button data-action="z-forward">上移</button>
         <button data-action="z-backward">下移</button>
         <button data-action="z-back">最後</button>
+      </div>
+      <div class="panel-section-title">操作</div>
+      <div class="btn-grid">
         <button data-action="delete-slot">刪除</button>
         <button data-action="duplicate-slot">複製</button>
       </div>
@@ -983,7 +1103,8 @@
   function textBoxPanelHtml(box) {
     return `
       <div class="panel-section-title">文字框屬性</div>
-      <div class="field-grid">
+      <div class="field-row"><button data-action="clear-selection" style="flex:1">← 回到文件屬性</button></div>
+      <div class="field-grid adv-only">
         <label class="span2">文字內容 <input type="text" data-text-field="text" value="${escapeHtml(box.text)}"></label>
         <label>字級 pt <input type="number" data-text-field="fontSizePt" value="${box.fontSizePt}"></label>
         <label>對齊 <select data-text-field="align">
@@ -994,9 +1115,9 @@
         <label>旋轉角度 <input type="number" data-text-field="rotationDeg" value="${box.rotationDeg}"></label>
         <label><input type="checkbox" data-text-field="bold" ${box.bold ? 'checked' : ''}> 粗體</label>
       </div>
-      <div class="hint-text">僅支援 ASCII 字元(§16,尚不支援中文)</div>
-      <div class="panel-section-title">Z 順序 / 操作</div>
-      <div class="btn-grid">
+      <div class="hint-text adv-only">僅支援 ASCII 字元(§16,尚不支援中文)</div>
+      <div class="panel-section-title adv-only">Z 順序 / 操作</div>
+      <div class="btn-grid adv-only">
         <button data-action="text-z-front">最前</button>
         <button data-action="text-z-forward">上移</button>
         <button data-action="text-z-backward">下移</button>
@@ -1011,6 +1132,9 @@
     const mergeable = canMergeSlots(slots);
     return `
       <div class="panel-section-title">已選取 ${slots.length} 個格位</div>
+      <div class="field-row">
+        <button data-action="clear-selection" style="flex:1">← 回到文件屬性</button>
+      </div>
       <div class="field-row">
         <button data-action="merge" style="flex:1" ${mergeable ? '' : 'disabled'}>合併(§9.3)</button>
       </div>
@@ -1048,7 +1172,6 @@
       <div class="btn-grid">
         <button data-action="delete-slot">刪除全部</button>
         <button data-action="duplicate-slot">複製全部</button>
-        <button data-action="clear-selection">清除選取</button>
       </div>
     `;
   }
@@ -1405,6 +1528,13 @@
     store.commit(setSelectionAction(ids), null, { historyEntry: false });
   }
 
+  $('canvas-viewport').addEventListener('pointerdown', (e) => {
+    const target = e.target;
+    if (target && typeof target.closest === 'function' && !target.closest('#paper-host')) {
+      setSelection([]);
+    }
+  });
+
   paperHost.addEventListener('pointerdown', (e) => {
     const st = state();
     const page = currentPage();
@@ -1594,7 +1724,57 @@
 
   $('mode-select').addEventListener('click', () => setMode('select'));
   $('mode-create').addEventListener('click', () => setMode('create'));
-  setMode('select');
+  $('ui-mode-simple').addEventListener('click', () => setUiMode('simple'));
+  $('ui-mode-advanced').addEventListener('click', () => setUiMode('advanced'));
+  $('btn-clear-slots').addEventListener('click', () => clearAllSlotContent());
+  $('btn-clear-sources').addEventListener('click', () => {
+    clearAllSources().catch((err) => {
+      toast(`清除來源失敗:${err.message}`, true);
+      console.error(err);
+    });
+  });
+
+  const propsResizer = $('props-resizer');
+  let propsResizeState = null;
+  function finishPropsResize() {
+    if (!propsResizeState) return;
+    const { pointerId, width, previousUserSelect } = propsResizeState;
+    try { propsResizer.releasePointerCapture(pointerId); } catch { /* pointer may already be released */ }
+    propsResizer.classList.remove('dragging');
+    document.body.style.userSelect = previousUserSelect;
+    propsResizeState = null;
+    safeStorageSet('props-w', String(width));
+    render();
+  }
+  propsResizer.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const width = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--props-w')) || DEFAULT_PROPS_WIDTH;
+    propsResizeState = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startWidth: width,
+      width,
+      previousUserSelect: document.body.style.userSelect,
+    };
+    try { propsResizer.setPointerCapture(e.pointerId); } catch { /* fallback to pointer events on the handle */ }
+    propsResizer.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+  });
+  propsResizer.addEventListener('pointermove', (e) => {
+    if (!propsResizeState || e.pointerId !== propsResizeState.pointerId) return;
+    propsResizeState.width = setPropsWidth(propsResizeState.startWidth - (e.clientX - propsResizeState.startX));
+    debounceRenderPropertiesResize();
+  });
+  propsResizer.addEventListener('pointerup', finishPropsResize);
+  propsResizer.addEventListener('pointercancel', finishPropsResize);
+  propsResizer.addEventListener('dblclick', () => {
+    if (propsResizeState) finishPropsResize();
+    const width = setPropsWidth(DEFAULT_PROPS_WIDTH);
+    safeStorageSet('props-w', String(width));
+    render();
+  });
+
+  const debounceRenderPropertiesResize = debounce(() => render(), 150);
 
   $('btn-add-page').addEventListener('click', () => {
     const st = state();
@@ -1661,6 +1841,7 @@
       }
       case 'undo': e.preventDefault(); store.undo(); break;
       case 'redo': e.preventDefault(); store.redo(); break;
+      case 'clearSelection': e.preventDefault(); setSelection([]); break;
       case 'selectAll': {
         e.preventDefault();
         setSelection(page.slots.map((s) => s.id));
@@ -1703,7 +1884,11 @@
   });
 
   store.subscribe(() => render());
-  window.addEventListener('resize', debounce(() => render(), 150));
+  window.addEventListener('resize', debounce(() => {
+    const currentWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--props-w')) || DEFAULT_PROPS_WIDTH;
+    setPropsWidth(currentWidth);
+    render();
+  }, 150));
   function debounce(fn, ms) {
     let t = null;
     return (...args) => { if (t) clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
@@ -1908,6 +2093,8 @@
     toast('已取消載入專案');
   });
 
+  setPropsWidth(safeStorageGet('props-w') ?? DEFAULT_PROPS_WIDTH);
+  setUiMode(safeStorageGet('ui-mode') === 'advanced' ? 'advanced' : 'simple');
   render();
 
   // Test/debug hooks (mirrors dev/*.html convention; harmless in production

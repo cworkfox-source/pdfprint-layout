@@ -7,6 +7,10 @@ test('resolveShortcut: Delete/Backspace both resolve to delete', () => {
   assert.deepEqual(resolveShortcut({ key: 'Backspace' }), { type: 'delete' });
 });
 
+test('resolveShortcut: Escape clears the current selection', () => {
+  assert.deepEqual(resolveShortcut({ key: 'Escape' }), { type: 'clearSelection' });
+});
+
 test('resolveShortcut: Ctrl+Z is undo, Ctrl+Y and Ctrl+Shift+Z are both redo', () => {
   assert.deepEqual(resolveShortcut({ key: 'z', ctrlKey: true }), { type: 'undo' });
   assert.deepEqual(resolveShortcut({ key: 'y', ctrlKey: true }), { type: 'redo' });

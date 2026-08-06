@@ -1628,3 +1628,42 @@ Phase 12 六步全數完成、`npm test` 全綠且較 543 淨增、單檔
 Features 新增 Phase 12 條目(比照既有 Phase 0–10 的記錄格式)。若使用者
 之後要求跨頁/跨專案剪貼簿或多語系 UI,需另開新的 decision 記錄,不得
 沿用本次「頁內複製貼上 + 全繁中單語」的既有決定直接擴大範圍。
+
+## D-021 — 產品 UI 改善計畫 U-0~U-4:模式密度、清除動作與可調面板
+
+### Date
+2026-08-06
+
+### Topic
+產品 UI / UX 狀態
+
+### Context
+Phase 12 的產品 UI 已可用,但使用者回報四個實際摩擦點:大多數情境只需
+快速操作、選取後缺少明確的離開路徑、來源與格位清除語意混在一起、以及
+Properties Panel 寬度不足。`docs/ui_improvement_plan.md` 將其拆成 U-0~U-4。
+
+### Alternatives Considered
+A. 維持單一完整介面,只增加更多按鈕。
+B. 導入簡易／詳細模式,將高頻操作與進階欄位分層,並補上明確的清除與
+   面板調整互動。
+
+### Selected Solution
+B,並採用計畫中的五項決定:
+1. 簡易模式為預設,保留紙張邊距與格位間距設定。
+2. 以 `localStorage` 記住模式與面板寬度,但以 try/catch 容忍不可用環境。
+3. 清除格位內容與清除來源拆成兩個按鈕,來源清除先顯示影響數量並確認。
+4. 每種批次清除只建立一筆 Undo,來源移除依既定釋放順序執行。
+5. Properties Panel 以 240 px 至 `min(720 px, 60vw)` 限制拖曳,雙擊回 300 px。
+
+### Reason
+這些決策直接對應使用者的操作意圖,降低初始畫面資訊密度,又不犧牲
+進階設定與可復原性;`localStorage` 僅保存 UI 偏好,符合 §20 的離線隱私邊界。
+
+### Consequences
+`app.html` 需在初始 HTML 宣告簡易模式以避免 FOUC,並將進階區塊以
+`.adv-only` 控制;Canvas 空白處與 `Esc` 共用清除選取語意。`src/keymap.js`
+新增 `clearSelection` 動作,`index.html` 必須由 build 重新產生。
+
+### Future Review Conditions
+若日後需要跨裝置同步 UI 偏好、第三種模式、或不同於目前兩種清除語意的
+批次操作,應另開 decision,不得把使用者檔案內容或專案資料寫入本地偏好儲存。

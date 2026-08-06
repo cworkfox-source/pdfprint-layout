@@ -12,6 +12,7 @@
 export function resolveShortcut({ key, ctrlKey = false, metaKey = false, shiftKey = false }) {
   const mod = ctrlKey || metaKey; // Cmd on macOS fills the same "primary modifier" role Ctrl does elsewhere
 
+  if (key === 'Escape') return { type: 'clearSelection' };
   if (key === 'Delete' || key === 'Backspace') return { type: 'delete' };
   if (mod && !shiftKey && (key === 'z' || key === 'Z')) return { type: 'undo' };
   // Both Ctrl+Y (Windows convention) and Ctrl+Shift+Z (Mac/many web apps'

@@ -4,6 +4,73 @@
 
 ## 2026-08-06 | Docs | Rotated 2 entries (rotation-record and 12:00 R-1 spec-amendment entry) to docs/logs/change_log_2026.md | wc -l verified (831 lines active after rotation, exceeds 400 because the 10-entry retention floor takes precedence)
 
+## 2026-08-06 13:59
+
+### Type
+Docs / Plan
+
+### Summary
+依使用者提出的 4 點 UI 需求(簡易/詳細介面、點空白處取消選取、一鍵清除、
+屬性面板可拖寬)撰寫 `docs/ui_improvement_plan.md`(U-0~U-4 工作包)。
+**尚未修改任何程式碼**,計畫待核可。
+
+### Files Changed
+- docs/ui_improvement_plan.md — 新增。含現況勘查、四個工作包設計、
+  檔案異動清單、13 項瀏覽器實測清單、5 個待拍板決策點(D-1~D-5)、
+  風險表與工時預估。
+
+### Reason
+使用者 2026-08-06 回報實際使用上的四個摩擦點,均集中在 `app.html` 產品
+UI(plan.md §18),與引擎行為無關。
+
+### Implementation Details
+勘查時發現 `app.html` 有**未提交**的半成品:前一階段已寫好 U-1/U-3/U-4 的
+HTML+CSS 骨架(`#ui-mode-simple`/`#ui-mode-advanced`、`.adv-only` 標記、
+`#btn-clear-sources`、`#props-resizer`、`--props-w`),但完全沒有對應
+JavaScript,目前這三個按鈕按了沒反應。計畫因此以「補上缺的 JS」為主軸,
+並新增 U-0 前置整理修掉骨架自帶的兩個缺陷:`<body>` 缺 `data-ui-mode`
+(會 FOUC 且簡易模式從未生效)、`#canvas-viewport` 缺 `min-width: 0`
+(面板拉寬會撐破版面)。
+
+### Impact Analysis
+本次僅新增文件,零程式碼風險。計畫執行後將動到 `app.html`、
+`src/keymap.js`(新增 Esc → clearSelection)與 `src/keymap.test.js`,
+並需 `npm run build` 重建 `index.html`;決策點核可後補 decision_log D-021。
+
+## 2026-08-06 | Product UI | 執行 docs/ui_improvement_plan.md(U-0~U-4)
+
+### Type
+Feature / UI / Docs
+
+### Summary
+完成簡易/詳細模式、取消選取、兩種批次清除與可調 Properties Panel,並重建
+單檔 `index.html`;原有未提交修改與計畫文件均保留並同步為已執行狀態。
+
+### Files Changed
+- `app.html` — U-0~U-4 的 CSS/HTML/事件/狀態與本機偏好儲存。
+- `src/keymap.js`, `src/keymap.test.js` — `Esc` → `clearSelection` 及回歸測試。
+- `index.html`, `docs/plan.md`, `docs/decision_log.md`, `docs/project_status.md`,
+  `docs/ui_improvement_plan.md` — build 產物與規格/決策/狀態同步。
+
+### Reason
+把使用者回報的四個 UI 摩擦點落地,同時保留完整進階欄位、離線邊界與 Undo
+可復原性;清除來源仍遵守來源鏡像/預覽快取/引擎釋放的既定順序。
+
+### Implementation Details
+簡易模式初始即由 `body[data-ui-mode]` 宣告,模式/面板寬度以容錯 localStorage
+記憶;空白畫布與 `Esc` 清除 selection;格位內容與來源分開確認、各自一筆
+Undo;面板寬度限制 240~`min(720,60vw)`,雙擊回 300。
+
+### Impact Analysis
+UI 進階欄位在簡易模式隱藏,但邊距/間距與高頻操作保留;批次來源清除會影響
+所有頁面的來源引用且需使用者確認。未使用真實檔案選擇器重跑來源清除
+全流程,因瀏覽器煙霧測試環境未提供檔案注入操作。
+
+### Verification
+`npm.cmd test`:561/561 passed;`npm.cmd run build`:成功產出 2,954,661 bytes
+`index.html`;瀏覽器已驗證簡易初始狀態、簡易/詳細切換、詳細欄位顯示/隱藏、
+無來源時兩個清除按鈕 disabled、resizer 存在且雙擊回 300px;console error/warn 為 0。
+
 ## 2026-08-06 12:20
 
 ### Type
