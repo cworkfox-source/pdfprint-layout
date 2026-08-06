@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Visual Page Imposition Designer — offline-first HTML/PDF/image imposition & print tool",
   "scripts": {
+    "build": "node scripts/build.mjs",
     "test": "node --test src/**/*.test.js"
   },
   "devDependencies": {}

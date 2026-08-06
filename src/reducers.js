@@ -277,6 +277,23 @@ export function removeSourceAction(sourceId) {
   return (state) => ({ ...state, sources: state.sources.filter((s) => s.id !== sourceId) });
 }
 
+// --- Project settings (§5.1/§8, Phase 12 12c) -------------------------------
+// §8 Paper — merges a partial update into state.project.paper, same
+// merge-a-partial-update convention as setCropMarksAction below (that
+// function's own comment already anticipated this: "mirroring how the
+// paper-settings UI would merge a single changed field"). A Page whose own
+// `paper` is non-null (rather than inheriting Project.paper, see
+// model.js's createPage()) is untouched by this action — Phase 12's
+// Properties Panel only edits the Project-level default; per-Page paper
+// overrides have no UI yet and are out of this reducer's scope.
+export function setPaperAction(overrides) {
+  return (state) => ({ ...state, project: { ...state.project, paper: { ...state.project.paper, ...overrides } } });
+}
+
+export function setProjectNameAction(name) {
+  return (state) => ({ ...state, project: { ...state.project, name } });
+}
+
 // §16 Crop Marks (Phase 8) — merges a partial update into
 // state.project.cropMarks, mirroring how the paper-settings UI would merge
 // a single changed field rather than requiring the whole settings object.

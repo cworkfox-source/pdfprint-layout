@@ -32,6 +32,8 @@ import {
   movePageAction,
   addSourceAction,
   removeSourceAction,
+  setPaperAction,
+  setProjectNameAction,
   setCropMarksAction,
   saveTemplateAction,
   deleteTemplateAction,
@@ -367,6 +369,35 @@ test('removeSourceAction removes a Source by id, leaving others untouched', () =
   store.commit(addSourceAction(b), null);
   store.commit(removeSourceAction('src-a'), null);
   assert.deepEqual(store.getState().sources, [b]);
+});
+
+// --- Project settings (§5.1/§8, Phase 12 12c) -------------------------------
+
+test('setPaperAction merges a partial update into state.project.paper, leaving other fields untouched', () => {
+  const store = createStore(makeTwoPageState());
+  const before = store.getState().project.paper;
+  assert.equal(before.size, 'A4');
+
+  store.commit(setPaperAction({ size: 'A3' }), null);
+  const after = store.getState().project.paper;
+  assert.equal(after.size, 'A3');
+  assert.equal(after.orientation, before.orientation); // untouched fields survive the merge
+  assert.equal(after.marginTopPt, before.marginTopPt);
+});
+
+test('setPaperAction can update multiple fields at once', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(setPaperAction({ orientation: 'landscape', marginTopPt: 20, gapHorizontalPt: 5 }), null);
+  const after = store.getState().project.paper;
+  assert.equal(after.orientation, 'landscape');
+  assert.equal(after.marginTopPt, 20);
+  assert.equal(after.gapHorizontalPt, 5);
+});
+
+test('setProjectNameAction replaces state.project.name', () => {
+  const store = createStore(makeTwoPageState());
+  store.commit(setProjectNameAction('我的專案'), null);
+  assert.equal(store.getState().project.name, '我的專案');
 });
 
 // --- Crop Marks (§16, Phase 8) ----------------------------------------------

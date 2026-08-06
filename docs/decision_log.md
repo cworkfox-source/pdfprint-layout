@@ -1539,3 +1539,92 @@ Text Box/浮水印,需要另外開一個 decision 記錄 fontkit 的引入與子
 使用者要求中文 Text Box/浮水印支援時、Bleed 對 contain-fit 內容的視覺
 限制被回報為 bug 時、Watermark 需要非置中位置時、`證件照8格` 需要符合
 實際證件照物理尺寸規格時。
+
+## D-020 — Phase 12 Product UI 增補:§18 [M] 產品介面漏排入 Phase 的根因、修正計畫核可、五個使用者決策點
+
+### Date
+2026-08-06
+
+### Topic
+架構 / 開發階段排序 / 產品範圍
+
+### Context
+2026-08-06 依使用者要求對 §10/§16/§18/§19/§22/§25 逐條與原始碼、打包後
+`index.html` 實際畫面比對,發現 `docs/plan.md` §18.1(三區架構)與
+§18.2(Properties Panel)均標為 **[M]**,但 §22 的 Phase 0–11 排序從未
+把它們排入任一階段——Phase 0–10 完整實作了引擎,Phase 11 的
+`scripts/build.mjs` 打包 entry 卻直接取自 `dev/print-aids.html`,一份
+自我標示「不是產品 UI,僅供人工／自動化檢查」的 Phase 10 dev harness
+(見 `dev/print-aids.html:29`)。結果是使用者拿到的正式單檔產物固定
+A4 直向 2-up、無法換版型、無 Undo/Redo 按鈕、無存檔、無列印按鈕,畫面
+上還留有 JSON readout 與 `[PASS]`/`[FAIL]` log 等除錯元素。
+
+盤點同時發現 10 個周邊缺口(完整列於 `docs/remediation_plan.md` §2 的
+G-01~G-12):`src/keymap.js` 是純 resolver、全專案無任何
+`addEventListener` 呼叫端(快捷鍵形同虛設);`dev/print-aids.html` 的
+`accept` 屬性未列 `.svg` 且 `handleFiles` 不分派到 `loadSvgFile()`
+(SVG 功能在打包產物中是死路);浮水印 `type: image` 有下拉選項但無任何
+指定 `imageSourceId` 的 UI;§19.4(D-007 使用者決議新增的更新檢查)與
+§10.4(批次套用)均為 [S] 但完全未實作;README.md 仍寫「規劃階段,
+尚未有程式碼」;以及若干已知設計限制(§17.1 載入專案須重選檔案、
+§16 文字 ASCII-only 等)只存在內部文件,使用者不可見。
+
+### Alternatives Considered
+A. 就地在既有 Phase 10/11 範圍內「補完」,不承認這是規格排序上的缺口,
+   直接動手改 `dev/print-aids.html` 讓它兼任產品 UI。
+B. 明確承認 §18 [M] 從未被排入 Phase 是規格執行上的疏漏,新增
+   Phase 12(Product UI)、更新 §22.1 總覽與新增 §23.9 驗收條件,
+   把產品 UI 當作獨立、可驗收的階段;先寫成
+   `docs/remediation_plan.md` 交使用者核可,核可後才動 plan.md。
+C. 把產品 UI 排除在本專案範圍外,永久維持「引擎 + dev harness」的
+   交付形態,由使用者自行接 UI。
+
+### Selected Solution
+B。使用者已核可 `docs/remediation_plan.md` 全文,並對計畫 §5 的五個
+決策點逐一採納建議方案:
+1. 核可整份修正計畫,包含本次對 plan.md §22/§23 的增補。
+2. UI 語言:全繁體中文單語,不建 i18n 框架。
+3. Ctrl+C/Ctrl+V 範圍:MVP 僅做「頁內 Slot 複製貼上」,不做跨頁/跨
+   Output Page/跨專案剪貼簿。
+4. `index.html` 命運:Phase 12 完成後由新產品 UI(`app.html`)的 build
+   直接取代;`dev/` 系列 harness 維持原樣,繼續作為引擎驗證用途保留。
+5. APP_VERSION / Release 版號起點:`v1.0.0`,於 R-7(重新打包)完成時
+   首發,§19.4 更新檢查以此為比對基準。
+
+### Reason
+`dev/*.html` 從 Phase 1 起的檔案內註解與 `docs/project_status.md` 就
+反覆強調「非產品 UI,僅供人工/自動化檢查」——這個邊界在文件層面一直
+是清楚的,問題是 §22 的階段排序本身漏排了「把邊界另一側的產品 UI 做
+出來」這一步,使得 Phase 11 打包時沒有非除錯用的入口可選,只能取用
+dev harness 頂替。選 B 而非 A,是因為 A 會讓「除錯頁兼任產品 UI」
+這個事實繼續被掩蓋,且違反 §4.1「Layout Model 與 DOM 分離」以外
+plan.md 從未言明、但一直隱含的假設——dev harness 的 DOM 結構、CSS、
+除錯 log 從未被設計成可交付給終端使用者。選 C 則直接違反 §1 產品
+定位(Visual Page Imposition Designer,非單純函式庫),Phase 0–10
+投入的引擎工作也將失去被實際使用的途徑。
+
+### Consequences
+- `docs/plan.md` §22 新增 Phase 12 條目(6 步:12a 骨架+Canvas、12b
+  Source Gallery、12c Properties Panel+批次套用、12d 畫布編輯互動、
+  12e 頁面管理+Auto Fill+專案系統、12f 快捷鍵+複製貼上)、§22.1 總覽
+  補上「→ Product UI → Re-build」、新增 §23.9 驗收條件(9 條)。
+- `scripts/build.mjs` 的 build entry 未來會從 `dev/print-aids.html`
+  改為新的 `app.html`;`index.html` 產物內容會整個改變(不再是除錯頁),
+  現有 §23.1「Phase 11 Standalone Build」驗收(單檔可重現、`file://`
+  可開啟)仍然適用於新 entry,不需要重新定義,只是 R-7 階段要重跑一次。
+- Phase 12 完成前,任何人拿到目前的 `index.html` 實質上只能做 Phase 10
+  dev harness 範圍內的事(固定 2-up、無存檔、無列印按鈕)——這個落差
+  在 Phase 12 完成前持續存在,已記錄於 `docs/project_status.md` 的
+  Planned Features 區塊供後續 session 得知現況。
+- Ctrl+C/V 範圍定為「頁內 Slot 複製貼上」後,若日後需要跨頁或跨專案
+  剪貼簿,需要重新設計 clipboard 的資料格式(目前的複製貼上不需要
+  離開 `AppState.pages` 的既有結構),屬於未來才需要考慮的擴充,不在
+  Phase 12 範圍內預先設計。
+
+### Future Review Conditions
+Phase 12 六步全數完成、`npm test` 全綠且較 543 淨增、單檔
+`index.html` 於 Chrome/Edge `file://` 下完成全流程冒煙測試後,回頭把
+§23.9 逐條勾選驗收,並在 `docs/project_status.md` 的 Completed
+Features 新增 Phase 12 條目(比照既有 Phase 0–10 的記錄格式)。若使用者
+之後要求跨頁/跨專案剪貼簿或多語系 UI,需另開新的 decision 記錄,不得
+沿用本次「頁內複製貼上 + 全繁中單語」的既有決定直接擴大範圍。

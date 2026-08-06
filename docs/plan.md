@@ -844,12 +844,58 @@ Bleed、Safe Area、Page Number、Header / Footer、Text Box、Watermark、SVG�
 
 Single HTML、Offline、No CDN、No Server 的正式 build 與跨瀏覽器驗證。
 
+> **範圍澄清（2026-08-06 追加，見 decision_log D-020）**：Phase 11 完成的
+> `index.html` 打包入口是 `dev/print-aids.html`——一份自我標示「不是產品
+> UI，僅供人工／自動化檢查」的 dev harness，並非 §18.1/§18.2 描述的產品
+> 介面。Phase 11 的驗收範圍僅止於「打包管線本身可重現、單檔離線」，不含
+> 產品 UI 的存在與可用性；產品 UI 由下方 Phase 12 補上。
+
+### Phase 12：Product UI
+
+> 2026-08-06 使用者決議新增，見 decision_log D-020。§18.1「三區架構」與
+> §18.2「Properties Panel」皆標為 **[M]**，但在 Phase 0–11 的排序中從未
+> 被實際排入任何階段——Phase 0–10 完整實作了引擎（排版／來源／自動填版／
+> 匯出／列印／專案／進階印刷輔助），但這些能力僅能透過個別 Phase 的
+> dev harness（`dev/*.html`，每個只驗證單一 Phase 的切面）操作，沒有任何
+> 單一介面能讓使用者依 §1 產品定位完整走過「載入 → 排版 → 匯出／列印」
+> 的流程。Phase 12 把已完成的引擎接上 §18 規定的產品介面，並補上隨之
+>發現的周邊缺口，不新增任何 §4–§17 尚未定義的功能語意。
+
+依 `docs/remediation_plan.md`（2026-08-06 缺口盤點,R-2/R-4/R-5/R-6 工作包）
+分六步交付：
+
+1. **12a 骨架 + Paper Canvas**：§18.1 三區 flex/grid 骨架、頂部工具列
+   （開啟／儲存專案、匯出、列印、校正頁、Undo/Redo、Zoom、§19.4 檢查
+   更新入口）、中央畫布串接既有 `src/preview.js` 全套 renderer。全繁體
+   中文單語介面（不建 i18n 框架）。移除 readout/log/verify 等除錯元素。
+2. **12b Source Gallery（左欄）**：§12.4 縮圖、頁碼範圍輸入、刪除、拖曳
+   到 Slot；SVG Source 接線（Phase 10 已有引擎、`dev/print-aids.html`
+   未接）；§25 明訂的 Annotations 遺失提示。
+3. **12c Properties Panel（右欄）+ §10.4 批次套用**：依選取切換
+   Paper／Slot／Text／多選 屬性面板；「文件」分頁收納 Bleed/Safe
+   Area/Header-Footer/Page Number/Watermark（含圖片來源選取 UI）/Crop
+   Marks；多選批次套用 fit/rotation/scale/alignment（§10.4）。
+4. **12d 畫布編輯互動**：Select/Create 模式、多選、拖曳移動、縮放
+   handle、Snap、分割/合併/刪除/複製，沿用 Phase 4 已驗證的互動邏輯。
+5. **12e 頁面管理 + Auto Fill + 專案系統整合**：Output Pages 管理、Auto
+   Fill 面板（含 §11.4 混合尺寸提示）、專案存讀 + relink 流程 UI、
+   Template 存取／套用 + 內建 Template Library。
+6. **12f 鍵盤快捷鍵接線 + 複製貼上**：§18.3 `src/keymap.js` resolver
+   接上實際事件層與 reducers；Ctrl+C/V 範圍為「頁內 Slot 複製貼上」。
+
+另含 §19.4 手動更新檢查（`src/update-check.js`，APP_VERSION 起點
+`1.0.0`）與內建使用者說明（快速上手、快捷鍵表、已知限制）。完成後
+`scripts/build.mjs` 的 build entry 由 `dev/print-aids.html` 改為新的
+`app.html`，`index.html` 產物隨之改變（`dev/` 系列 harness 維持原樣，
+繼續作為引擎驗證用途保留，不受影響）。
+
 ### 22.1 開發優先順序總覽
 
 ```text
 Feasibility Spike → Data Model → Paper Engine → Slot Layout Engine
 → Source Engine → Free Layout Designer → Preview → Auto Fill
 → PDF Export → Print Path → Project / Template → 第二階段 → Standalone HTML
+→ Product UI（Phase 12）→ Re-build
 ```
 
 ---
@@ -912,6 +958,31 @@ Feasibility Spike → Data Model → Paper Engine → Slot Layout Engine
 3. 中斷網路後點擊「檢查更新」，顯示「無法檢查更新（可能離線）」，核心排版／
    匯出／列印功能不受影響（可繼續正常操作）。
 4. 偵測到新版時，顯示的連結可正確導向該版本的 GitHub Release 頁面。
+
+### 23.9 Phase 12 Product UI [M]
+
+> 2026-08-06 追加，見 decision_log D-020。
+
+1. 以 build 產物 `index.html`（`file://` 開啟）為準，不依賴任何 `dev/*.html`：
+   使用者可在不打開瀏覽器開發者工具的前提下，完成「載入 PDF/圖片 →
+   套用 Preset 或自訂版型 → 拖曳來源到 Slot → Auto Fill → 匯出 PDF」
+   全流程。
+2. 畫面符合 §18.1 三區配置（Gallery / Canvas / Properties），且無殘留
+   除錯用文字（JSON dump、`[PASS]`/`[FAIL]` log 等）。
+3. §18.2 五種 Properties Panel（Paper／Slot／Image／Text／Export）依選取
+   物件正確切換顯示。
+4. §18.3 表列的每個快捷鍵在畫布取得焦點時實測有效（Delete/Ctrl+Z/
+   Ctrl+Y/Ctrl+C/Ctrl+V/Ctrl+A/Arrow/Shift+Arrow）。
+5. §10.4 批次套用：對 3 個以上、初始狀態互不相同的已選取 Slot 一次套用
+   fit/rotation/scale 中至少一項，結果對每個 Slot 生效且以單一步驟
+   即可 Undo。
+6. SVG 檔案可經 UI 載入、拖入 Slot、匯出後於 PDF 閱讀器中正確顯示。
+7. 浮水印選擇「圖片」類型時，UI 提供從已載入 Source 選取圖片的方式，
+   且匯出結果反映所選圖片。
+8. §25 表列「Annotations 遺失」於載入含超連結/表單欄位的 PDF 時，UI
+   顯示明確提示文字。
+9. 內建說明可從 UI 開啟，內容涵蓋快速上手步驟、快捷鍵表，以及 §25、
+   §11.4、§17.1 表列的每一項已知限制。
 
 ---
 

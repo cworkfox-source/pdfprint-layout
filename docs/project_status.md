@@ -1,17 +1,13 @@
 # Project Overview
 
 ## Current State TL;DR (max 5 lines — Startup reads ONLY this block)
-Visual Page Imposition Designer,public repo
-https://github.com/cworkfox-source/pdfprint-layout。**Phase 0-10 已完成**
-(引擎層 Phase 0-9,加上 **Print Aids 進階功能**〔Bleed/Safe Area/Header-
-Footer/Page Number/Text Box/浮水印/SVG Source/Align & Distribute/鍵盤
-快捷鍵/內建 Template Library,見 D-019〕),543 個單元測試 + 瀏覽器實測
-(dev/print-aids.html,含真實 pdf-lib 匯出結構驗證)皆通過。下一步:
-Phase 11(Standalone Build)。無 blocker。目前工作分支為
-`claude/phase-5-handling-wi8vcd`(非 master,見 Current Version)。
+Visual Page Imposition Designer, public repo.
+Phase 0–12 complete; `docs/remediation_plan.md` (R-1~R-7) fully closed.
+`index.html` (2,948,131 bytes) now builds from the real product UI
+`app.html`, not a dev harness. 560 tests pass; checkout is `master`.
 
 ## Current Version
-Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 10 完成
+Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 11 Standalone Build 完成
 (含 Phase 4 遺留的鎖定/解鎖、Z-order [M] 缺口補完見 D-013、
 AppState.sources 從未被寫入的缺口補完見 D-015、Crop Marks 預設值與繪製
 範圍見 D-017、AppState.templates 從未被寫入的缺口 + SCHEMA_VERSION 遲到
@@ -465,12 +461,46 @@ work 直接延續在該分支上。另有一個更早、未整合的分支
     視覺一致性透過 `export-real-pdf-lib.test.js` 對真實 `cm` 矩陣做
     迴歸驗證(90° 旋轉 b 分量 ≈ ±1),不僅憑手動推導,細節見 D-019。
 
+- Phase 12 Product UI(2026-08-06,`docs/remediation_plan.md` R-2,六步
+  12a~12f 全部完成):新增 `app.html`,§18.1/§18.2 [M] 首次有對應的產品
+  介面(先前 Phase 0–11 完整實作了引擎,但 §18 的三區架構/Properties
+  Panel 從未被排入任何 Phase,見 decision_log D-020)。
+  - 12a 骨架:三區 CSS Grid + 頂部工具列(開啟/儲存專案、Undo/Redo、
+    縮放、列印、校正頁、匯出 PDF)+ 中央 Paper Canvas,`preview.js`
+    全部 DOM adapter 首次在單一畫面全部接齊。
+  - 12b Source Gallery:PDF/圖片/SVG 載入、頁碼範圍、拖曳到 Slot、刪除
+    (含 §12.6 記憶體釋放與 Slot 懸空參照清理)、§25 Annotations 遺失
+    提示、加密 PDF 友善錯誤訊息。
+  - 12c Properties Panel:依選取切換 Paper+文件設定/單一 Slot/單一
+    Text Box/多選(對齊/分布/等尺寸/§10.4 批次套用)四種面板;新增
+    `src/reducers.js` 的 `setPaperAction`/`setProjectNameAction`(填補
+    先前缺口)。
+  - 12d 畫布編輯互動:Select/Create 模式、拖曳移動與 8 個縮放 handle
+    (皆含 Snap)、框選多選、拖曳建立格位、水平/垂直分割、合併——邏輯
+    移植自已驗證過的 `dev/free-layout.html`(Phase 4)。
+  - 12e 頁面管理 + Auto Fill + 專案系統:Output Pages 新增/複製/刪除/
+    排序、Auto Fill 面板(含 §11.4 混合尺寸提示)、內建+使用者自存
+    Template 存取、完整 Source Relink 對話框(取代 12a 的局部實作)。
+  - 12f 鍵盤快捷鍵 + 複製貼上(同時完成 remediation_plan.md R-5):
+    `src/keymap.js` 首次被實際接上事件層,Delete/Ctrl+Z/Ctrl+Y/Ctrl+A/
+    Arrow/Shift+Arrow 全數可用;Ctrl+C/V 為「頁內 Slot 複製貼上」。
+  - 546 個單元測試通過(較 543 新增 3 個 `setPaperAction`/
+    `setProjectNameAction` 測試)+ 六步各自的瀏覽器實測(真實
+    `PointerEvent`/`KeyboardEvent`/`DragEvent`/`File`+`change` 事件驅動,
+    非僅呼叫內部函式),含 save→load→relink 全流程驗證「內容確實可
+    重新渲染」而不只是 metadata 比對成功。詳見 change_log
+    2026-08-06 13:10~16:30 各條目。
+
 ## Features In Development
-無。Phase 10 已完成,下一步為 Phase 11(Standalone Build)。
+無。Phase 0–12、Standalone Build 與 `docs/remediation_plan.md` 全部
+7 個工作包(R-1~R-7)皆已完成。
 
 ## Planned Features
-見 `docs/plan.md` §22 開發階段。Phase 11(單檔離線 esbuild 正式 build,
-跨瀏覽器驗證)是 §22 最後一個階段。
+`docs/remediation_plan.md`(2026-08-06 缺口盤點後的修正計畫)全部
+7 個工作包(R-1~R-7,含 12a~12f 六步)已於 2026-08-06 完成,G-01~G-12
+缺口全數關閉。後續為 plan.md §25 明訂的第二階段功能與跨瀏覽器持續
+回歸驗證(雙面列印/背面對齊、中文字型內嵌、書帖排版、標籤紙預設、
+色彩管理),詳見 Future Roadmap。
 
 ## Known Issues
 - plan.md §9.1 的「2+2」preset 未定義其與 2×2 grid(=4up)的幾何差異,
@@ -549,6 +579,25 @@ work 直接延續在該分支上。另有一個更早、未整合的分支
   環境限制而非程式問題;Phase 10 因此改以「pdf-lib 重新載入解析 PDF
   結構(operator/resource 存在性)」取代這一步視覺驗證,見 change_log
   2026-08-06 10:00 的 Verification Result。
+
+## Phase 11 Standalone Build(2026-08-06,entry 已於 R-7 切換為 app.html)
+
+- `scripts/build.mjs` 的 build entry 原本取自 `dev/print-aids.html`
+  (Phase 10 dev harness),2026-08-06 R-7(remediation_plan.md)切換為
+  Phase 12 的產品 UI `app.html`——`createReleaseHtml()` 也同步移除了
+  對 dev harness 專用 `<title>`/`<h1>` 的強制覆寫(`app.html` 自己已有
+  正確的產品標題「拼版設計工具」,不需要再改)。以 esbuild 0.25.9 輸出
+  browser IIFE,再注入單一 `index.html`。
+- pdf.js 與 pdf-lib 由本機 vendor 直接 bundle；pdf.js worker 原始碼以 Blob URL 內嵌，
+  不依賴 CDN、Server 或外部 script/stylesheet。
+- 產物大小 2,948,131 bytes(切換 entry 後,較 Phase 11 原始的
+  2,874,334 bytes 略增,反映 Phase 12 產品 UI 的程式碼量),重複 build
+  SHA-256 相同(`0376a5c25007b673009170de1bec220434917a57c4b4f0f80a7020fc4d4cb167`)；
+  靜態檢查確認無 ESM import、外部資源 URL 或 build 暫存檔。
+- `file://` 冒煙測試(Chrome,見 change_log 2026-08-06 R-7 條目):完整
+  載入圖片來源→套用版型→拖曳到格位→匯出 PDF 全流程通過,console 無
+  錯誤,證明 Blob URL worker + 內嵌 pdf.js/pdf-lib 的離線可行性延續到
+  新的 `app.html` entry,不是 Phase 11 原始驗證的巧合。
 
 ## Technical Architecture
 Vanilla HTML5 + ES6+,PDF.js 負責解析與預覽,pdf-lib 負責輸出,esbuild 打包成
@@ -660,11 +709,14 @@ N/A — 純前端,無後端 API。
 
 ## Deployment Process
 原始碼與文件託管於 https://github.com/cworkfox-source/pdfprint-layout
-(public)。Phase 11 產出單一 `index.html`,經 GitHub Release 發布,使用者
-雙擊即可在 Chrome / Edge 開啟使用;應用程式本身除 §19.4 手動更新檢查外
-不得依賴 CDN / Server / Internet。發布流程見 plan.md §19.5。
+(public)。Phase 11 已產出單一 `index.html`；使用者可雙擊檔案在 Chrome / Edge 開啟。
+正式產物除 §19.4 手動更新檢查外不得依賴 CDN / Server / Internet；發布流程見
+`docs/plan.md` §19.5。
 
 ## Dependencies
+Phase 11 build 固定使用 esbuild 0.25.9，由 `npm exec` 取得且不寫入專案依賴；
+pdf.js 5.4.149、pdf-lib 1.17.1 仍由 `scripts/fetch-vendor.sh` 取得至 gitignored 的
+`vendor/`，並在 build 時完整內嵌。
 PDF.js(開發用 v5.4.149,由 `scripts/fetch-vendor.sh` 取得至 `vendor/`,不
 commit,見 decision_log D-009)、pdf-lib(開發用 1.17.1,同樣由
 `scripts/fetch-vendor.sh` 取得,unpkg CDN 被 proxy 擋 403、改用 npm
@@ -673,8 +725,11 @@ registry tarball,見 decision_log D-015;Phase 7 起實際使用)、esbuild
 (2026-08-05 移除無關的 Python 打包 playbook)。
 
 ## Future Roadmap
-Phase 11(plan §22 最後階段):Standalone Build——esbuild 打包成單一 IIFE
-`index.html`、`file://` 相容性驗證、跨瀏覽器測試(plan §19)。
-第二階段其餘未排入 Phase 10 的項目(plan §16、§25):雙面列印/背面對齊
-(名片、卡片類需求);中文 Text Box/浮水印(需要 fontkit 內嵌字型子集,
-見 decision_log D-019)。
+Phase 12(plan §22 最後階段,含 Product UI)已完成：esbuild 打包成單一
+IIFE `index.html`(entry 為 `app.html`),完成單檔/離線靜態驗證 +
+`file://` 冒煙測試。首次正式發布時應建立 GitHub Release `v1.0.0`
+(APP_VERSION 常數,`app.html`)供 §19.4 更新檢查比對;Chrome / Edge 的
+實機 `file://` 回歸仍應在每次發布前持續執行。第二階段其餘未排入 Phase
+0–12 的項目(plan §16、§25):雙面列印/背面對齊(名片、卡片類需求);
+中文 Text Box/浮水印(需要 fontkit 內嵌字型子集,見 decision_log
+D-019)。

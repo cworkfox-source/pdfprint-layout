@@ -29,8 +29,8 @@
 <h1>Phase 10 dev harness — 不是產品 UI，僅供人工／自動化檢查 Print Aids（見 docs/plan.md Phase 10 / §16）</h1>
 
 <div class="controls">
-  <label>PDF / Image 檔案
-    <input id="file-input" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,image/*,application/pdf">
+  <label>PDF / Image / SVG 檔案
+    <input id="file-input" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.svg,image/*,application/pdf,image/svg+xml">
   </label>
   <button id="assign-sources">依序指派來源到 2 個 Slot</button>
 </div>
@@ -118,8 +118,12 @@
     addTextBoxAction, setTextBoxContentAction,
   } from '/src/reducers.js';
   import { createSourceEngine } from '/src/sources.js';
-  import { renderPdfPageThumbnail, decodeImage, renderImageThumbnail, renderPdfPagePreview, renderImagePreview } from '/src/render-adapters.js';
+  import {
+    renderPdfPageThumbnail, decodeImage, renderImageThumbnail, renderPdfPagePreview, renderImagePreview,
+    decodeSvgText, renderSvgThumbnail, renderSvgPreview,
+  } from '/src/render-adapters.js';
   import { transcodeWebpToPng } from '/src/export-adapters.js';
+  import { rasterizeSvgToPng } from '/src/render-adapters.js';
   import { createBinaryStore } from '/src/binary-store.js';
   import { exportProjectToPdf } from '/src/export.js';
 
@@ -149,6 +153,9 @@
     renderImageThumbnail,
     renderPdfPagePreview,
     renderImagePreview,
+    decodeSvgText,
+    renderSvgThumbnail,
+    renderSvgPreview,
     onThumbnailReady: (sourceId) => {
       const img = document.querySelector(`.tile[data-source-id="${sourceId}"] img`);
       const thumb = engine.getThumbnail(sourceId);
@@ -246,6 +253,10 @@
           const newSources = await engine.loadPdfFile(file, { pdfjsLib, pageRange: 'all' });
           for (const s of newSources) { sources.set(s.id, s); store.commit(addSourceAction(s), null); renderTile(s); }
           log(`載入 PDF ${file.name}: ${newSources.length} 頁`, true);
+        } else if (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) {
+          const s = await engine.loadSvgFile(file);
+          sources.set(s.id, s); store.commit(addSourceAction(s), null); renderTile(s);
+          log(`載入 SVG ${file.name}`, true);
         } else {
           const s = await engine.loadImageFile(file);
           sources.set(s.id, s); store.commit(addSourceAction(s), null); renderTile(s);
@@ -342,7 +353,7 @@
   $('export-pdf').addEventListener('click', async () => {
     try {
       const state = store.getState();
-      const bytes = await exportProjectToPdf(state, { binaryStore, pdfLib: PDFLib, transcodeWebpToPng });
+      const bytes = await exportProjectToPdf(state, { binaryStore, pdfLib: PDFLib, transcodeWebpToPng, rasterizeSvgToPng });
       window.__lastExportBytes = bytes;
       log(`Export 完成: ${bytes.length} bytes`, true);
 
