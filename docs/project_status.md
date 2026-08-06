@@ -6,8 +6,9 @@ Phase 0–12 complete; `docs/remediation_plan.md` (R-1~R-7) fully closed.
 `index.html` (2,955,569 bytes) builds from `app.html`. 561 tests pass;
 checkout is `master`. `docs/ui_improvement_plan.md` U-0~U-4 已執行;
 簡易/詳細模式、批次清除、Esc/空白處取消選取、Properties Panel resizer、
-Slot 點選編輯/刪除、文字框拖曳、多檔選取全部生效(見 change_log 修正
-`#file-input-sources` live-FileList bug)皆已接線,尚未提交。
+Slot 點選編輯/刪除、文字框拖曳、多檔選取(修正 live-FileList bug)、
+Slot 內容可由 Properties Panel 的來源下拉選單/選檔按鈕直接指定或更換
+(不再僅限拖放)皆已接線,尚未提交。
 
 ## Current Version
 Plan v2.1(§5.2 補 docId 欄位、§9.1 補非對稱 preset 假設)/ Phase 11 Standalone Build 完成

@@ -2,6 +2,70 @@
 
 > Older entries: docs/logs/ (archive, do not load at startup)
 
+## 2026-08-06 18:40 | Product UI | Slot Properties panel can now assign/replace a Slot's content by clicking
+
+### Type
+Feature / Bugfix
+
+### Summary
+User follow-up after the previous entry: clicking a Slot correctly switched
+the Properties Panel to "格位屬性" (already fixed), but there was no way to
+actually change *what's in it* by clicking — only drag-from-gallery or
+drag-a-file-onto-the-slot could assign a Source. The Slot Properties panel
+now has a "來源" dropdown (pick any already-loaded Source, mirroring the
+existing Watermark image-source picker pattern) and a "從電腦選擇圖片 /
+PDF…" button that opens a file picker scoped to the selected Slot and
+assigns the first loaded file directly.
+
+### Files Changed
+- app.html —
+  - New hidden `#file-input-slot-content` (single-file, same `accept` list
+    as the gallery's multi-file input).
+  - `slotPanelHtml(slot)`: new "內容" section with
+    `<select data-slot-field="sourceId">` (options from `state().sources`,
+    empty option clears content) above the existing Fit/Scale fields.
+  - `handleSlotFieldChange()`: new `sourceId` branch — non-empty value
+    commits `setSlotSourceAction`, empty value commits
+    `clearSlotContentAction` (existing actions, already used by the drop
+    handler and the "清除內容" button respectively).
+  - `pendingSlotFileTargetId` (module-level, mirrors the `dragState`/`mode`
+    pattern already used for other cross-handler UI state): set by the new
+    `pick-source-file` case in `handlePropertiesPanelAction()`, consumed by
+    `#file-input-slot-content`'s `change` handler, which snapshots
+    `[...e.target.files]` before resetting `input.value` (same live-
+    FileList fix as the gallery input, applied here from the start) and
+    commits `setSlotSourceAction` with the first source `handleSourceFiles()`
+    loads.
+
+### Reason
+User reported (2026-08-06, follow-up to the multi-file-selection fix
+above): "格位原本是可以編輯,不知道甚麼時候被改掉,幫我恢復點擊格位後可以
+編輯格位內容的功能" — clicking a Slot produced no visible effect toward
+changing its content ("點了沒反應"). Investigation found this was never
+implemented in `app.html`'s Properties Panel (12c/12d only wired Fit/Scale/
+Rotation/Offset/Flip/Lock, not content assignment) — Source assignment was
+drag-only. No prior commit removed a "click to edit content" feature; the
+user's expectation was reasonable but the gap predates this session.
+
+### Impact Analysis
+Drag-from-gallery and drag-a-file-onto-a-slot remain unchanged and are
+still the primary assignment paths for touch/mouse-first workflows; the
+new dropdown/button are an additive, keyboard-and-click-friendly path for
+the same underlying `setSlotSourceAction`/`clearSlotContentAction` reducer
+calls already exercised by existing tests. No `src/` engine files changed.
+
+### Verification
+`npm.cmd test`: 561/561 passed. `npm.cmd run build`: index.html
+2,956,699 bytes. Browser smoke (`app.html` via dev server): applied 4-up
+preset, selected a Slot, confirmed both the "來源" dropdown and "從電腦
+選擇圖片 / PDF…" button render; assigned a pre-loaded Source via the
+dropdown (`slot.sourceId` updated); stubbed the hidden input's native
+`.click()` to avoid a real OS file dialog in the automated browser, then
+dispatched a synthetic `change` with a fresh `File` — confirmed
+`pendingSlotFileTargetId` correctly round-tripped (the new Source was
+loaded into `state.sources` AND assigned to the originally-selected Slot).
+`read_console_messages`: 0 errors throughout.
+
 ## 2026-08-06 18:10 | Product UI | Fixed multi-file source selection dropping all but the first file
 
 ### Type

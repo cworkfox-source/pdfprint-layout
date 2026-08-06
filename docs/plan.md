@@ -468,7 +468,10 @@ PDF → 取得頁數 → 建立 Source Page（含 mediaBox / cropBox / rotate）
 顯示縮圖、檔名、PDF 頁碼；支援多選、全選、刪除、旋轉、翻轉、複製、拖曳到 Canvas。
 多選檔案時每張圖片皆建立一個 Source，PDF 依指定頁碼範圍（預設全部）建立一個
 Source/頁。使用者可從左欄拖曳縮圖，或直接把檔案拖放到 Slot；後者置入第一個成功
-讀入的 Source，其餘讀入內容仍完整保留於 Source Gallery。
+讀入的 Source，其餘讀入內容仍完整保留於 Source Gallery。點選一個 Slot 後，右欄
+Properties Panel 的「格位屬性」亦提供「來源」下拉選單（從已載入的 Source 中挑選）
+與「從電腦選擇圖片 / PDF…」按鈕（直接開檔案選取器載入並指定給該 Slot）——拖放
+仍是主要路徑，此為點選為主操作習慣的等效替代，不取代拖放。
 
 ### 12.5 [M] 大型 PDF 效能
 
